@@ -347,7 +347,10 @@
             const m = window.Store.materialById(req.materialId);
             if (m) {
                 const before = snapshotMaterial(m);
+                const keepImg = m.image;
                 Object.assign(m, materialFromPayload(p));
+                // an amend whose payload carries no photo must not wipe the item's photo
+                if (!p.image && keepImg) m.image = keepImg;
                 m.sapId = m.sapId || sapId;
                 if (window.I18N && window.I18N.stampItemAz) window.I18N.stampItemAz(m);
                 logChange(m, req, diffMaterial(before, m));

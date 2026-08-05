@@ -325,9 +325,14 @@
         // readable wording on the hidden name field and locks the long description.
         const seed = [p.shortName, p.manufacturer, p.mfrPartNo].filter(Boolean).join(' ');
         const a2 = window.AI.analyze(seed);
-        const sd = (a2.known && a2.parsed.longDesc)
-            ? { shortName: a2.parsed.shortName, longDesc: a2.parsed.longDesc }
-            : window.AI.structuredDesc(p);
+        // an item whose descriptions are ALREADY MRO-structured (e.g. amending a
+        // mastered record) keeps them verbatim — never re-derive and overwrite
+        const alreadyStructured = !/[a-z]/.test(p.shortName || '');
+        const sd = alreadyStructured
+            ? { shortName: p.shortName, longDesc: p.longDesc }
+            : ((a2.known && a2.parsed.longDesc)
+                ? { shortName: a2.parsed.shortName, longDesc: a2.parsed.longDesc }
+                : window.AI.structuredDesc(p));
         const nameInput = document.querySelector('input[name="name"]');
         if (nameInput && /[a-z]/.test(p.shortName || '') && (!nameInput.value || nameInput.value === p.shortName)) nameInput.value = p.shortName;
         const sn = document.querySelector('[name="shortName"]');

@@ -4,6 +4,7 @@
 (function () {
     const KEY = 'dmp_dp_state_v1';
     let state = null;
+    let loadedSavedAt = 0;   // __savedAt as it was when loaded — the honest age of the local copy
     const listeners = new Set();
 
     function load() {
@@ -15,16 +16,72 @@
     }
 
     function persist() {
+        state.__savedAt = Date.now();
         try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+        scheduleServerSave();
+    }
+
+    /* ---- server-side persistence: every change is synced (debounced) to
+       /api/state, which server.py stores on disk with rolling backups.
+       localStorage stays as a fast local cache; the copy with the newest
+       __savedAt wins on load. Fails silently on static-only hosts. ---- */
+    let saveTimer = null;
+    let syncPending = false;
+    function scheduleServerSave() {
+        if (typeof fetch !== 'function' || syncPending) return;   // never race the initial pull
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+            try {
+                fetch('/api/state', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(state) }).catch(() => {});
+            } catch (e) { /* ignore */ }
+        }, 400);
+    }
+    function syncFromServer(done) {
+        if (typeof fetch !== 'function') { if (done) done(false); return; }
+        syncPending = true;
+        clearTimeout(saveTimer);
+        fetch('/api/state', { cache: 'no-store' })
+            .then(r => (r.status === 200 ? r.json() : null))
+            .catch(() => null)
+            .then(remote => {
+                let changed = false;
+                if (remote && remote.__seeded) {
+                    // compare against the age of the copy as LOADED — boot-time persists
+                    // re-stamp __savedAt and must not make stale local data look fresh.
+                    // A fresh seed (wiped browser) always defers to the server copy.
+                    if (state.__freshSeed || (remote.__savedAt || 0) > loadedSavedAt) {
+                        state = remote;
+                        migrate(state);
+                        loadedSavedAt = remote.__savedAt || 0;
+                        changed = true;
+                    }
+                }
+                delete state.__freshSeed;
+                try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+                syncPending = false;
+                scheduleServerSave();   // make sure the server holds the current state
+                if (done) done(changed);
+            });
+    }
+    // flush the latest state when the tab closes (covers the debounce window)
+    if (typeof window.addEventListener === 'function') {
+        window.addEventListener('beforeunload', () => {
+            try {
+                if (state && navigator.sendBeacon) navigator.sendBeacon('/api/state', JSON.stringify(state));
+            } catch (e) { /* ignore */ }
+        });
     }
 
     function init() {
         state = load();
+        loadedSavedAt = (state && state.__savedAt) || 0;
         if (!state || !state.__seeded) {
             state = window.Seed.build();      // fresh seed
             state.__seeded = true;
+            state.__freshSeed = true;         // must defer to any existing server-side state
             state.__spec10Cleanup = 2;        // fresh seeds already contain only the Spec10 master
-            state.__spec10V = 3;              // ...at the current (verbatim + images) data version
+            state.__spec10V = 4;              // ...at the current (verbatim + images) data version
             state.__mroV = 1;                 // ...with MRO-structured descriptions
         } else {
             migrate(state);                   // backfill keys added in newer versions
@@ -74,9 +131,13 @@
         }
         // merge newly seeded materials (e.g. the Spec10 batch) into existing states
         fresh.materials.forEach(fm => { if (!s.materials.some(m => m.id === fm.id)) s.materials.push(fm); });
+        // Spec10 data versions are MONOTONIC — each pass runs at most once, ever.
+        // (an earlier exact-match check made the v2 pass re-run after v3 had set the
+        // flag to 3, re-seeding the records on every other load)
+        const dataV = Number(s.__spec10V) || 0;
         // one-time refresh (v2): Spec10 fields are now verbatim from the source file —
         // replace stored copies, keeping any changelog / inventory the user added
-        if (s.__spec10V !== 2) {
+        if (dataV < 2) {
             fresh.materials.forEach(fm => {
                 const i = s.materials.findIndex(m => m.id === fm.id);
                 if (i === -1) return;
@@ -105,7 +166,7 @@
         }
         // v3: restore item photos — recover uploads from completed request payloads
         // (the v2 refresh dropped them), else fall back to the seeded placeholder
-        if (s.__spec10V !== 3) {
+        if (dataV < 3) {
             s.materials.forEach(m => {
                 // a seeded SVG placeholder may be replaced by a recovered upload; a real upload never is
                 if (!m.image || m.image.indexOf('data:image/svg+xml') === 0) {
@@ -119,6 +180,19 @@
                 }
             });
             s.__spec10V = 3;
+        }
+        // v4: deeper photo recovery — an uploaded photo may sit in ANY request payload
+        // for the item (pending amends included, newest first). A placeholder icon is
+        // always replaced by a recovered upload; a real photo is never touched.
+        if (dataV < 4) {
+            s.materials.forEach(m => {
+                if (m.image && m.image.indexOf('data:image/svg+xml') !== 0) return;   // real photo present
+                const withImg = (s.requests || []).filter(r =>
+                    r.materialId === m.id && r.payload && r.payload.image &&
+                    String(r.payload.image).indexOf('data:image/svg+xml') !== 0);
+                if (withImg.length) m.image = withImg[0].payload.image;   // requests are newest-first
+            });
+            s.__spec10V = 4;
         }
         // legacy Active/Blocked item statuses → lifecycle status + separate block flag
         s.materials.forEach(m => {
@@ -211,6 +285,6 @@
         init, get, set, reset, subscribe, uid,
         materials, materialById, requests, requestById, session, notifications,
         setRole, addNotification, markAllNotificationsRead,
-        persist
+        persist, syncFromServer
     };
 })();
