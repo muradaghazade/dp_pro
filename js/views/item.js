@@ -31,14 +31,17 @@
             } else {
                 actions.push({ act: 'unblock-central', label: '♻ Remove ' + blockStatus.toLowerCase() });
             }
-        } else if (role === 'Finance') {
-            // Finance may only change the valuation class — instantly, no approval
+        } else if (role === 'Accounting') {
+            // Accounting may only change the valuation class — instantly, no approval
             actions.push({ act: 'change-valuation', label: '✎ Change valuation class' });
         } else if (role === 'Inventory team') {
             // Inventory team maintains inventory planning data directly — instantly, no approval
             actions.push({ act: 'edit-inventory', label: '✎ Edit inventory data' });
         } else {
-            if (!inMyPlant) actions.push({ act: 'extend', label: '↗ Extend to my plant' });
+            // extendable when the requester has access to any plant the item is not in yet
+            const u = (window.Store.get().users || []).find(x => x.name === sess.currentUser);
+            const myPlants = (u && u.plants && u.plants.length) ? u.plants : [myPlant];
+            if (myPlants.some(pc => (m.plants || []).indexOf(pc) === -1)) actions.push({ act: 'extend', label: '↗ Extend to plant' });
             if (inMyPlant && !blockStatus) actions.push({ act: 'amend', label: '✎ Amend' });
             if (inMyPlant && !blockStatus) actions.push({ act: 'block', label: '⛔ Block (my plant)' });
             if (inMyPlant && plantBlocked) actions.push({ act: 'reactivate', label: '♻ Reactivate' });
@@ -55,6 +58,7 @@
             { k: 'Category · UNSPSC', v: (m.unspscLabel || m.category) ? (m.unspscLabel || m.category) + (m.unspsc ? ' · ' + m.unspsc : '') : '' },
             { k: 'Material group', v: m.materialGroup ? m.materialGroup + ' — ' + window.UI.groupDesc(m.materialGroup) : '' },
             { k: 'Base UoM', v: m.baseUom },
+            { k: 'PO unit', v: m.poUnit },
             { k: 'Storage location', v: m.storageLocation }
         ];
 
@@ -108,16 +112,18 @@
                         : '<div class="muted">No technical attributes.</div>'}
                 </div>
 
+                ${(m.documents && m.documents.length) ? `<div class="panel-card"><div class="pc-title">Supporting documents</div>${window.UI.docListHtml(m.documents)}</div>` : ''}
+
                 ${m.inventory ? `<div class="panel-card"><div class="pc-title">Inventory planning</div>${window.UI.inventoryRows(m.inventory)}</div>` : ''}
             </div>`;
 
         window.UI.bindActions(root, {
             'back': () => window.UI.go('#/master'),
             'history': () => window.UI.go('#/item/' + m.id + '/history'),
-            'extend': () => { window.Views._draft = { type: 'extend', materialId: m.id }; window.UI.go('#/request/new?type=extend'); },
-            'amend': () => { window.Views._draft = { type: 'amend', materialId: m.id }; window.UI.go('#/request/new?type=amend'); },
-            'block': () => { window.Views._draft = { type: 'block', materialId: m.id }; window.UI.go('#/request/new?type=block'); },
-            'reactivate': () => { window.Views._draft = { type: 'reactivate', materialId: m.id }; window.UI.go('#/request/new?type=reactivate'); },
+            'extend': () => { window.Views._draft = { type: 'extend', materialId: m.id }; window.UI.go('#/request/new?type=extend&mat=' + m.id); },
+            'amend': () => { window.Views._draft = { type: 'amend', materialId: m.id }; window.UI.go('#/request/new?type=amend&mat=' + m.id); },
+            'block': () => { window.Views._draft = { type: 'block', materialId: m.id }; window.UI.go('#/request/new?type=block&mat=' + m.id); },
+            'reactivate': () => { window.Views._draft = { type: 'reactivate', materialId: m.id }; window.UI.go('#/request/new?type=reactivate&mat=' + m.id); },
             'change-valuation': () => valuationModal(m),
             'edit-inventory': () => inventoryModal(m),
             'block-proc': () => centralAction(m, 'block_proc'),
@@ -187,7 +193,7 @@
         });
     };
 
-    // Finance: change the valuation class only — instant, no approval chain
+    // Accounting: change the valuation class only — instant, no approval chain
     function valuationModal(m) {
         const vcs = window.Store.get().datasets.VALUATION_CLASSES;
         window.UI.openModal({

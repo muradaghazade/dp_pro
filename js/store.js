@@ -15,8 +15,11 @@
         return null;
     }
 
-    function persist() {
-        state.__savedAt = Date.now();
+    // noStamp: write-through without advancing __savedAt — used at boot, where
+    // migrations rewrite the state but it is NOT newer user data. Re-stamping here
+    // made stale local copies win against the server on every refresh.
+    function persist(noStamp) {
+        if (!noStamp) state.__savedAt = Date.now();
         try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
         scheduleServerSave();
     }
@@ -37,7 +40,7 @@
             } catch (e) { /* ignore */ }
         }, 400);
     }
-    function syncFromServer(done) {
+    function syncFromServer(done, mode) {
         if (typeof fetch !== 'function') { if (done) done(false); return; }
         syncPending = true;
         clearTimeout(saveTimer);
@@ -47,10 +50,12 @@
             .then(remote => {
                 let changed = false;
                 if (remote && remote.__seeded) {
-                    // compare against the age of the copy as LOADED — boot-time persists
-                    // re-stamp __savedAt and must not make stale local data look fresh.
+                    // at boot: compare against the age of the copy as LOADED — boot-time
+                    // persists re-stamp __savedAt and must not make stale local data look
+                    // fresh. On focus re-syncs the in-memory stamp is the honest baseline.
                     // A fresh seed (wiped browser) always defers to the server copy.
-                    if (state.__freshSeed || (remote.__savedAt || 0) > loadedSavedAt) {
+                    const base = mode === 'focus' ? ((state && state.__savedAt) || 0) : loadedSavedAt;
+                    if (state.__freshSeed || (remote.__savedAt || 0) > base) {
                         state = remote;
                         migrate(state);
                         loadedSavedAt = remote.__savedAt || 0;
@@ -71,28 +76,66 @@
                 if (state && navigator.sendBeacon) navigator.sendBeacon('/api/state', JSON.stringify(state));
             } catch (e) { /* ignore */ }
         });
+        // a tab returning to the foreground re-pulls the server copy, so a tab left
+        // open never keeps working on (or later saves) stale data
+        window.addEventListener('visibilitychange', () => {
+            if (document.visibilityState !== 'visible') return;
+            syncFromServer((changed) => {
+                if (!changed) return;
+                if (window.UI && window.UI.renderHeader) window.UI.renderHeader();
+                if (window.Router && window.Router.render) window.Router.render();
+                if (window.I18N && window.I18N.apply) window.I18N.apply();
+            }, 'focus');
+        });
+        // cross-tab consistency: when another tab of this browser saves the state,
+        // adopt it immediately — otherwise a stale tab can approve-then-revert by
+        // pushing its old copy over changes made elsewhere
+        window.addEventListener('storage', (e) => {
+            if (e.key !== KEY || !e.newValue) return;
+            try {
+                const incoming = JSON.parse(e.newValue);
+                if (!incoming.__seeded) return;
+                if ((incoming.__savedAt || 0) <= ((state && state.__savedAt) || 0)) return;
+                state = incoming;
+                loadedSavedAt = incoming.__savedAt || 0;
+                if (window.UI && window.UI.renderHeader) window.UI.renderHeader();
+                if (window.Router && window.Router.render) window.Router.render();
+                if (window.I18N && window.I18N.apply) window.I18N.apply();
+            } catch (err) { /* ignore */ }
+        });
     }
 
     function init() {
         state = load();
-        loadedSavedAt = (state && state.__savedAt) || 0;
         if (!state || !state.__seeded) {
             state = window.Seed.build();      // fresh seed
             state.__seeded = true;
             state.__freshSeed = true;         // must defer to any existing server-side state
+            state.__stampV = 2;               // honest save-stamps from the start
             state.__spec10Cleanup = 2;        // fresh seeds already contain only the Spec10 master
             state.__spec10V = 4;              // ...at the current (verbatim + images) data version
             state.__mroV = 1;                 // ...with MRO-structured descriptions
+            state.__accountingV = 1;          // fresh seeds already use the Accounting role name
+            state.__stewardV = 1;             // ...and chains without the Steward review stage
         } else {
             migrate(state);                   // backfill keys added in newer versions
         }
-        persist();
+        // capture AFTER migrate — it may invalidate untrusted (inflated) stamps
+        loadedSavedAt = state.__savedAt || 0;
+        persist(true);   // write-through only — booting is not "newer data"
     }
 
     // non-destructive migration: add any datasets / top-level keys introduced after this
     // state was first persisted, without wiping the user's requests/materials.
     function migrate(s) {
         const fresh = window.Seed.build();
+        // one-time: earlier builds re-stamped __savedAt on every boot, inflating the
+        // age of stale local copies. Treat such stamps as untrusted so the server
+        // copy wins the next comparison; from here on stamps only mark real changes.
+        if (s.__stampV !== 2) {
+            s.__savedAt = 0;
+            s.__stampV = 2;
+        }
         // refresh static reference datasets from the current seed, but keep the user's
         // dynamically-grown category catalog.
         const keepCats = (s.datasets && Array.isArray(s.datasets.CATEGORY_ATTRIBUTES)) ? s.datasets.CATEGORY_ATTRIBUTES : fresh.datasets.CATEGORY_ATTRIBUTES;
@@ -206,6 +249,47 @@
         s.requests.forEach(r => (r.stages || []).forEach(st => {
             if (st.label === 'Material master review') st.label = 'MDM review';
         }));
+        // rename (Aug 2026): the Finance role & approval stage are now called Accounting —
+        // update users, session, request stages/history and notifications in place
+        if (s.__accountingV !== 1) {
+            const ren = (t) => (t ? String(t).replace(/\bFinance\b/g, 'Accounting') : t);
+            if (s.session && s.session.currentRole === 'Finance') s.session.currentRole = 'Accounting';
+            (s.users || []).forEach(u => { if (u.role === 'Finance') u.role = 'Accounting'; });
+            s.requests.forEach(r => {
+                (r.stages || []).forEach(st => {
+                    if (st.role === 'Finance') st.role = 'Accounting';
+                    if (st.label === 'Finance') st.label = 'Accounting';
+                });
+                (r.history || []).forEach(h => {
+                    if (h.actorRole === 'Finance') h.actorRole = 'Accounting';
+                    h.text = ren(h.text);
+                });
+            });
+            (s.notifications || []).forEach(n => {
+                if (n.forRole === 'Finance') n.forRole = 'Accounting';
+                n.title = ren(n.title);
+                n.body = ren(n.body);
+            });
+            s.__accountingV = 1;
+        }
+        // Steward review removed (Aug 2026): create/amend chains no longer include the
+        // Central team stage — only new-category requests go to the Central team
+        if (s.__stewardV !== 1) {
+            s.requests.forEach(r => {
+                if ((r.type !== 'create' && r.type !== 'amend') || !Array.isArray(r.stages)) return;
+                const ci = r.stages.findIndex(st => st.key === 'central');
+                if (ci === -1) return;
+                r.stages.splice(ci, 1);
+                if (r.currentStageIndex > ci) r.currentStageIndex -= 1;
+                // a request that was WAITING at Steward review now sits on the SAP
+                // system stage — run it so it doesn't hang on a system-only step
+                if ((r.status === 'In Review' || r.status === 'Approved') && window.Workflow && window.Workflow.autoAdvance) {
+                    const st = r.stages[r.currentStageIndex];
+                    if (st && st.system) window.Workflow.autoAdvance(r);
+                }
+            });
+            s.__stewardV = 1;
+        }
         // amend requests no longer have Finance or Inventory stages — strip them
         s.requests.forEach(r => {
             if (r.type !== 'amend' || !Array.isArray(r.stages)) return;
@@ -278,7 +362,10 @@
         });
     }
     function markAllNotificationsRead() {
-        set(s => s.notifications.forEach(n => { n.read = true; }));
+        // only the notifications visible to the current role — other roles keep their unread badge
+        set(s => s.notifications.forEach(n => {
+            if (!n.forRole || n.forRole === s.session.currentRole) n.read = true;
+        }));
     }
 
     window.Store = {

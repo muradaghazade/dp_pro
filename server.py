@@ -16,6 +16,7 @@ import os
 import sys
 import json
 import time
+import threading
 import functools
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -26,6 +27,19 @@ STATE_FILE = os.path.join(DATA_DIR, "state.json")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 KEEP_BACKUPS = 30
 
+_LOCK = threading.Lock()
+
+
+def _stored_saved_at():
+    try:
+        with open(STATE_FILE, "rb") as f:
+            return json.load(f).get("__savedAt") or 0
+    except Exception:
+        return 0
+
+
+LAST_SAVED_AT = _stored_saved_at()
+
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -33,6 +47,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _api(self):
         return self.path.split("?")[0] == "/api/state"
+
+    def end_headers(self):
+        # local dev server: always revalidate, so a refresh never runs stale app code
+        self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
 
     def do_GET(self):
         if self._api():
@@ -59,11 +78,25 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length)
-            json.loads(body)  # must be valid JSON — never overwrite good data with garbage
+            incoming = json.loads(body)  # must be valid JSON — never overwrite good data with garbage
         except Exception:
             self.send_response(400)
             self.end_headers()
             return
+        # stale-write guard: a tab holding an older copy (e.g. its unload beacon
+        # during a refresh) must never overwrite newer data already on disk
+        global LAST_SAVED_AT
+        with _LOCK:
+            ts = (incoming.get("__savedAt") or 0) if isinstance(incoming, dict) else 0
+            if ts < LAST_SAVED_AT:
+                resp = b'{"ok":false,"reason":"stale"}'
+                self.send_response(409)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+            LAST_SAVED_AT = ts
         os.makedirs(DATA_DIR, exist_ok=True)
         os.makedirs(BACKUP_DIR, exist_ok=True)
         # rolling backup of the previous good state (at most one per minute)

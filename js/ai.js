@@ -543,8 +543,10 @@
             if (v === undefined || v === null || String(v).trim() === '') blocking.push({ field: f.k, msg: f.label + ' is required.' });
         });
 
-        // mandatory category attributes (from the category schema) also block submission
-        const schema = (window.UI && window.UI.categorySchema) ? window.UI.categorySchema(payload.unspsc) : null;
+        // mandatory category attributes (from the category schema) also block submission —
+        // except for sourcing records, where all technical attributes are optional
+        const schema = (window.UI && window.UI.categorySchema && payload.recordType !== 'Sourcing record')
+            ? window.UI.categorySchema(payload.unspsc) : null;
         if (schema) {
             (schema.attributes || []).forEach(a => {
                 if (a && a.mandatory) {

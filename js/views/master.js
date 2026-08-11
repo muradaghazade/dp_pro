@@ -148,15 +148,17 @@
         }
         if (a.outcome === 'exists_my_plant') {
             const m = a.exactMatch;
-            return `<div class="banner danger">
-                    <span class="banner-icon">🚫</span>
+            // green: good news — the item is already available in the user's plant
+            return `<div class="banner match">
+                    <span class="banner-icon">✅</span>
                     <div class="banner-body"><div class="banner-title">This item already exists in your plant (${esc(myPlant)})</div>
                         You cannot create a new request for it. Open the record to use, amend or block it.</div>
                 </div>${cardHtml(m)}`;
         }
         if (a.outcome === 'exists_other_plant') {
             const m = a.exactMatch;
-            return `<div class="banner match">
+            // blue: informational — the item exists elsewhere and can be extended
+            return `<div class="banner info">
                     <span class="banner-icon">↗️</span>
                     <div class="banner-body"><div class="banner-title">Exists in plant ${esc(m.plants[0])} — extend it to your plant</div>
                         This item is already mastered in another plant. Create an <strong>extension request</strong> to add it to Plant ${esc(myPlant)}. You cannot create it as a brand-new item.</div>
@@ -168,7 +170,8 @@
             ? `<div class="rb-title" style="margin:6px 0 12px">Similar items you could use as an alternative</div>
                <div class="items-list-container">${a.similar.map(m => cardHtml(m)).join('')}</div>`
             : `<div class="muted" style="margin:6px 0 12px">No similar items found in the material master.</div>`;
-        return `<div class="banner info">
+        // red: the item does not exist anywhere — a new item request is needed
+        return `<div class="banner danger">
                 <span class="banner-icon">➕</span>
                 <div class="banner-body"><div class="banner-title">No exact match in the material master</div>
                     You don't have this item yet. Review the alternatives below, or create a new item request for your plant (Plant ${esc(myPlant)}).</div>
@@ -371,8 +374,9 @@
     }
 
     function pendingRequests() {
+        // bulk requests are tracked on the request page, not as pending item cards
         return window.Store.requests().filter(r =>
-            (r.type === 'create') && (r.status === 'Draft' || r.status === 'In Review'));
+            (r.type === 'create') && !r.bulk && (r.status === 'Draft' || r.status === 'In Review'));
     }
 
     function matchesFilters(entry) {
@@ -438,18 +442,58 @@
         }, 850);
     }
 
-    // "Request New Category": propose a category + attributes → reviewed by the Central team
+    // read-only view of the AI-generated category proposal (requester cannot edit it)
+    function categoryProposalHtml(p) {
+        const rows = (p.catAttributes || []).map(a => `<tr>
+            <td>${esc(a.name)}</td><td>${esc(a.fieldType || 'Text')}</td><td>${esc(a.uom || '—')}</td>
+            <td>${(a.mandatory === true || a.mandatory === 'Yes') ? 'Yes' : 'No'}</td><td>${esc(a.options || '—')}</td></tr>`).join('');
+        return `<div class="def-grid" style="margin-bottom:14px">
+                <div class="def-row"><div class="def-k">Category name</div><div class="def-v">${esc(p.categoryName)}</div></div>
+                <div class="def-row"><div class="def-k">UNSPSC code</div><div class="def-v">${esc(p.unspsc)}</div></div>
+            </div>
+            <div class="rb-title" style="margin-bottom:8px">Attributes</div>
+            <div class="cat-attr-wrap"><table class="data-table">
+                <thead><tr><th>Attribute name</th><th>Field type</th><th>UoM</th><th>Mandatory</th><th>List values</th></tr></thead>
+                <tbody>${rows || '<tr><td colspan="5" class="muted">No attributes</td></tr>'}</tbody>
+            </table></div>`;
+    }
+
+    // "Request New Category": the AI's proposal → reviewed by the Central team.
+    // The requester submits the system-generated proposal as-is; only the Central
+    // team may adjust categories/attributes (during their review or in the catalog).
     function categoryRequestModal() {
         const parsed = S.analysis && S.analysis.parsed || {};
-        const prefill = S.analysis && S.analysis.categorySuggestion
+        const suggestion = S.analysis && S.analysis.categorySuggestion
             ? JSON.parse(JSON.stringify(S.analysis.categorySuggestion))
-            : { categoryName: '', unspsc: '', catAttributes: [] };
+            : null;
+        const submit = (o, data) => {
+            o.remove();
+            const payload = Object.assign({ name: data.categoryName, shortName: data.categoryName, sourceText: S.query || '' }, data);
+            const req = window.Workflow.createRequest({ type: 'category', payload });
+            window.UI.toast({ title: 'Request sent to Central team',
+                body: window.Workflow.reqNo(req) + ' — you will be notified when the category is reviewed.', kind: 'info' });
+        };
+        if (suggestion) {
+            window.UI.openModal({
+                title: 'Request new category',
+                wide: true,
+                bodyHtml: `<p class="muted" style="margin-bottom:14px">The AI has generated this category and attribute set for your item. The proposal is system-generated and <strong>cannot be edited</strong> — submit it and the Central team will review it (adjusting it if needed) before it is added to the catalog.</p>
+                    ${parsed.summary ? `<div class="banner info" style="margin-bottom:14px"><span class="banner-icon">✦</span><div class="banner-body"><div class="banner-title">Searched item</div>${window.UI.esc(parsed.summary)}</div></div>` : ''}
+                    ${categoryProposalHtml(suggestion)}`,
+                buttons: [
+                    { label: 'Cancel', cls: 'btn-outline', onClick: (o) => o.remove() },
+                    { label: 'Submit request', cls: 'btn-green', onClick: (o) => submit(o, suggestion) }
+                ]
+            });
+            return;
+        }
+        // fallback (no AI proposal available): manual editable form
         window.UI.openModal({
             title: 'Request new category',
             wide: true,
-            bodyHtml: `<p class="muted" style="margin-bottom:14px">The AI has proposed a category and attribute set for this item — review and adjust anything before sending. The Central team will review your proposal and on approval the category is added to the catalog.</p>
+            bodyHtml: `<p class="muted" style="margin-bottom:14px">Describe the category and its attributes — the Central team will review your proposal and on approval the category is added to the catalog.</p>
                 ${parsed.summary ? `<div class="banner info" style="margin-bottom:14px"><span class="banner-icon">✦</span><div class="banner-body"><div class="banner-title">Searched item</div>${window.UI.esc(parsed.summary)}</div></div>` : ''}
-                <div id="cat-req-editor">${window.UI.categoryEditorHtml(prefill)}</div>`,
+                <div id="cat-req-editor">${window.UI.categoryEditorHtml({ categoryName: '', unspsc: '', catAttributes: [] })}</div>`,
             onOpen: (o) => window.UI.bindCategoryEditor(o.querySelector('#cat-req-editor')),
             buttons: [
                 { label: 'Cancel', cls: 'btn-outline', onClick: (o) => o.remove() },
@@ -460,11 +504,7 @@
                         window.UI.toast({ title: 'Cannot submit', body: 'Please complete the category details.', kind: 'danger' });
                         return;
                     }
-                    o.remove();
-                    const payload = Object.assign({ name: data.categoryName, shortName: data.categoryName, sourceText: S.query || '' }, data);
-                    const req = window.Workflow.createRequest({ type: 'category', payload });
-                    window.UI.toast({ title: 'Request sent to Central team',
-                        body: window.Workflow.reqNo(req) + ' — you will be notified when the category is reviewed.', kind: 'info' });
+                    submit(o, data);
                 } }
             ]
         });
@@ -481,7 +521,7 @@
     }
     function startExtend(id) {
         window.Views._draft = { type: 'extend', materialId: id };
-        window.UI.go('#/request/new?type=extend');
+        window.UI.go('#/request/new?type=extend&mat=' + id);
     }
     function emptyPayload() {
         const s = window.Store.session();

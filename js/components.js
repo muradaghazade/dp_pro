@@ -39,6 +39,24 @@
     function categorySchema(unspsc) { return (ds().CATEGORY_ATTRIBUTES || []).find(c => c.unspsc === unspsc) || null; }
     function abcDesc(code) { const a = (ds().ABC_CODES || []).find(x => x.code === code); return a ? a.desc : ''; }
     // storage locations belong to a plant; plants without their own list fall back to the generic one
+    /* ---- supporting documents: shared list rendering ---- */
+    function docKB(size) { return (size / 1024).toFixed(2) + ' KB'; }
+    const DOC_CLIP = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`;
+    const DOC_TRASH = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>`;
+    // read-only list (request detail / item page); pass {deletable:true} for the form
+    function docListHtml(docs, opts) {
+        opts = opts || {};
+        if (!docs || !docs.length) return '';
+        return `<div class="doc-table">
+            <div class="doc-thead"><span>File</span><span>${opts.deletable ? 'Action' : ''}</span></div>
+            ${docs.map((d, i) => `<div class="doc-row">
+                <span class="doc-name"><span class="doc-clip">${DOC_CLIP}</span>
+                    <a href="${d.data}" download="${esc(d.name)}" title="Download">${esc(d.name)} (${docKB(d.size || 0)})</a></span>
+                ${opts.deletable ? `<button type="button" class="doc-del" data-doc-del="${i}" title="Remove">${DOC_TRASH}</button>` : '<span></span>'}
+            </div>`).join('')}
+        </div>`;
+    }
+
     function storageOptionsFor(plant) {
         const list = (window.STORAGE_LOCATIONS_BY_PLANT || {})[String(plant || '')];
         if (list && list.length) return list.map(l => ({ value: l.code, label: l.code + ' — ' + l.name }));
@@ -111,12 +129,23 @@
     function inboxCountFor(role) {
         return window.Store.requests().filter(r => window.Workflow.isAwaiting(r, role)).length;
     }
+    // Requester attention count: declined requests + own requests waiting for
+    // the requester's approval (valuation class sign-off)
+    function requesterCount(s) {
+        return window.Store.requests().filter(r => r.requesterUser === s.currentUser &&
+            (r.status === 'Declined' || window.Workflow.isAwaiting(r, 'Requester'))).length;
+    }
+    // notifications addressed to a specific role are only shown while acting as it
+    function visibleNotifications() {
+        const role = window.Store.session().currentRole;
+        return window.Store.notifications().filter(n => !n.forRole || n.forRole === role);
+    }
     function renderHeader() {
         const s = window.Store.session();
         const roles = ds().ROLES;
-        const unread = window.Store.notifications().filter(n => !n.read).length;
+        const unread = visibleNotifications().filter(n => !n.read).length;
         const myCount = s.currentRole === 'Requester'
-            ? window.Store.requests().filter(r => r.requesterUser === s.currentUser && r.status === 'Declined').length
+            ? requesterCount(s)
             : inboxCountFor(s.currentRole);
 
         const header = document.getElementById('app-header');
@@ -152,9 +181,7 @@
                     <div class="role-menu" id="role-menu">
                         <div class="role-menu-head">Switch role (demo)</div>
                         ${roles.map(r => {
-                            const c = r === 'Requester'
-                                ? window.Store.requests().filter(x => x.requesterUser === s.currentUser && x.status === 'Declined').length
-                                : inboxCountFor(r);
+                            const c = r === 'Requester' ? requesterCount(s) : inboxCountFor(r);
                             return `<div class="role-menu-item ${r === s.currentRole ? 'active' : ''}" data-act="role-pick" data-role="${esc(r)}">
                                 <span>${esc(r)}</span>${c ? `<span class="badge">${c}</span>` : ''}</div>`;
                         }).join('')}
@@ -222,7 +249,7 @@
         const panel = document.getElementById('notif-panel');
         const open = panel.classList.contains('open');
         if (open) { panel.classList.remove('open'); return; }
-        const notifs = window.Store.notifications();
+        const notifs = visibleNotifications();
         panel.innerHTML = `
             <div class="notif-head"><span>Notifications</span>
                 <button class="btn-link" data-act="mark-read">Mark all read</button></div>
@@ -315,7 +342,7 @@
             control = `<input class="form-input ${cls}" type="text" name="${name}" value="${esc(opts.value || '')}" ${ro} placeholder="${esc(opts.placeholder || '')}">`;
         }
         return `<div class="field ${spanCls}">
-            <label>${esc(opts.label)}${req}</label>
+            <label class="${opts.required ? 'req-label' : ''}">${esc(opts.label)}${req}</label>
             ${control}
             ${opts.hint ? `<div class="hint">${esc(opts.hint)}</div>` : ''}
             <div class="field-error" data-err="${name}">${opts.error ? esc(opts.error) : ''}</div>
@@ -335,12 +362,18 @@
         const stages = window.Workflow.stagesFor(req);
         const idx = req.currentStageIndex;
         const declined = req.status === 'Declined';
-        return `<div class="wf-tracker">${stages.map((st, i) => {
+        const submitted = req.status !== 'Draft';
+        // step 0 (always first): the request being created by its requester
+        const createdCls = submitted ? 'done' : 'current';
+        const created = `<div class="wf-node"><div class="wf-dot ${createdCls}">${submitted ? '✓' : 1}</div>
+            <div class="wf-label">Request created<span class="wf-who">${esc(req.requesterUser)}</span></div></div>
+            <div class="wf-connector ${submitted ? 'done' : ''}"></div>`;
+        return `<div class="wf-tracker">${created}${stages.map((st, i) => {
             let dotCls = '', label = st.label;
             if (declined && i === idx) dotCls = 'declined';
             else if (i < idx || req.status === 'Completed') dotCls = 'done';
             else if (i === idx) dotCls = 'current';
-            const inner = dotCls === 'done' ? '✓' : (dotCls === 'declined' ? '✕' : (i + 1));
+            const inner = dotCls === 'done' ? '✓' : (dotCls === 'declined' ? '✕' : (i + 2));
             const conn = i < stages.length - 1 ? `<div class="wf-connector ${i < idx || req.status === 'Completed' ? 'done' : ''}"></div>` : '';
             return `<div class="wf-node"><div class="wf-dot ${dotCls}">${inner}</div><div class="wf-label">${esc(label)}</div></div>${conn}`;
         }).join('')}</div>`;
@@ -609,6 +642,7 @@
         renderHeader, toggleNotifPanel,
         field, techGrid, workflowTracker, historyList,
         categoryEditorHtml, bindCategoryEditor, collectCategoryEditor, validateCategoryEditor, searchSelectHtml,
-        plantName, plantLabel, groupDesc, valuationDesc, categorySchema, abcDesc, storageOptionsFor, inventoryRows, ds
+        plantName, plantLabel, groupDesc, valuationDesc, categorySchema, abcDesc, storageOptionsFor, inventoryRows, ds,
+        docListHtml, docKB
     };
 })();

@@ -5,21 +5,25 @@
 
     /* ---- base stage definitions per request type (human/system steps after submit) ---- */
     const CHAINS = {
+        // Accounting selects the valuation class first; the requester then approves it
+        // (decline sends it back to Accounting) before the technical chain starts
+        // no Steward review step — the Central team only reviews new-category requests
         create: [
+            { key: 'finance', role: 'Accounting', label: 'Accounting' },
+            { key: 'requester_approval', role: 'Requester', label: 'Requester approval' },
             { key: 'technical', role: 'Technical SME', label: 'Technical review' },
-            { key: 'finance', role: 'Finance', label: 'Finance' },
             { key: 'mdm', role: 'MDM Specialist', label: 'MDM review' },
-            { key: 'central', role: 'Central team', label: 'Steward review' },
             { key: 'sap', role: 'System', label: 'SAP creation', system: true }
         ],
-        // amends keep the item's existing valuation class — no Finance step
+        // amends keep the item's existing valuation class — no Accounting step
         amend: [
             { key: 'technical', role: 'Technical SME', label: 'Technical review' },
             { key: 'mdm', role: 'MDM Specialist', label: 'MDM review' },
-            { key: 'central', role: 'Central team', label: 'Steward review' },
             { key: 'sap', role: 'System', label: 'SAP update', system: true }
         ],
+        // plant extensions need MDM Specialist approval before SAP is updated
         extend: [
+            { key: 'mdm', role: 'MDM Specialist', label: 'MDM review' },
             { key: 'sap', role: 'System', label: 'SAP extension', system: true }
         ],
         block: [
@@ -40,7 +44,7 @@
         unblock_central: [
             { key: 'sap', role: 'System', label: 'SAP unblock', system: true }
         ],
-        // Finance-only valuation class change — no approval, straight to SAP
+        // Accounting-only valuation class change — no approval, straight to SAP
         valuation: [
             { key: 'sap', role: 'System', label: 'SAP valuation update', system: true }
         ],
@@ -154,6 +158,23 @@
         // SAP has run but a post-SAP stage (inventory) remains: the item is already
         // approved & live — don't keep the request "In Review" while inventory is pending
         if (req.sapId) req.status = 'Approved';
+        // the role now holding the request gets notified, with the requester's name
+        const nst = currentStage(req);
+        if (nst && !nst.system) {
+            if (nst.key === 'requester_approval') {
+                notify({
+                    title: 'Valuation class selected — your approval needed',
+                    body: `${reqNo(req)} “${req.title}” — Accounting selected valuation class ${req.payload.valuationClass || '—'}. Approve to continue, or decline to send it back to Accounting.`,
+                    kind: 'info', requestId: req.id, forRole: 'Requester'
+                });
+            } else {
+                notify({
+                    title: 'New request in your queue',
+                    body: `${reqNo(req)} “${req.title}” from ${req.requesterUser} — awaiting ${nst.label}.`,
+                    kind: 'info', requestId: req.id, forRole: nst.role
+                });
+            }
+        }
     }
 
     /* ---- act on a request (approve / decline / edit-approve / inventory submit) ---- */
@@ -164,6 +185,23 @@
         if (!st) return;
 
         window.Store.set(() => {
+            // requester declines the Accounting-selected valuation class → the request
+            // stays In Review and loops back to the Accounting stage with the note
+            if (action === 'decline' && st.key === 'requester_approval') {
+                const fi = req.stages.findIndex(x => x.key === 'finance');
+                req.currentStageIndex = fi === -1 ? 0 : fi;
+                pushHistory(req, {
+                    actorRole: s.currentRole, actorUser: s.currentUser, action: 'declined',
+                    text: 'Declined at ' + st.label + ' — returned to Accounting',
+                    comment: data.comment
+                });
+                notify({
+                    title: 'Valuation class declined by requester',
+                    body: `${reqNo(req)} “${req.title}” — ${s.currentUser} declined the valuation class. Please select again.`,
+                    kind: 'danger', requestId: req.id, forRole: 'Accounting'
+                });
+                return;
+            }
             if (action === 'decline' || action === 'correction') {
                 req.status = 'Declined';
                 pushHistory(req, {
@@ -174,7 +212,7 @@
                 notify({
                     title: 'Request needs your attention',
                     body: `${typeLabel(req.type)} “${req.title}” was ${action === 'correction' ? 'returned for correction' : 'declined'} by ${s.currentRole}.`,
-                    kind: 'danger', requestId: req.id
+                    kind: 'danger', requestId: req.id, forRole: req.requesterRole
                 });
                 return;
             }
@@ -194,12 +232,164 @@
                 comment: data.comment
             });
             if (st.key === 'inventory') {
-                notify({ title: 'Inventory setup complete', body: `Inventory data set for “${req.title}” (SAP ID ${req.sapId}).`, kind: 'success', requestId: req.id });
+                notify({ title: 'Inventory setup complete', body: `Inventory data set for “${req.title}” (SAP ID ${req.sapId}).`, kind: 'success', requestId: req.id, forRole: req.requesterRole });
             }
             req.currentStageIndex += 1;
 
             if (isActive(req)) autoAdvance(req);
         });
+    }
+
+    /* ================= BULK requests =================
+       One request carrying N items of the same type (create / extend / category).
+       Approvers act on the whole batch at once: approve all, decline all, or
+       approve a selection (the rest is declined — one mandatory comment covers
+       every declined item). Declined items drop out; the rest continue. ---- */
+
+    const BULK_TITLE = { create: 'Bulk new items', extend: 'Bulk plant extension', category: 'Bulk new categories' };
+
+    function createBulkRequest(opts) {
+        // opts: { type, items: [{desc, payload, materialId?}], requesterPlant? }
+        const s = window.Store.session();
+        const req = {
+            id: window.Store.uid('req'), type: opts.type, bulk: true,
+            title: (BULK_TITLE[opts.type] || 'Bulk request') + ' — ' + opts.items.length + ' items',
+            requesterUser: s.currentUser, requesterRole: s.currentRole,
+            requesterPlant: opts.requesterPlant || s.plant,
+            materialId: null,
+            payload: {},
+            items: opts.items.map((it, i) => ({
+                key: 'i' + i, desc: it.desc || '', payload: it.payload || {},
+                materialId: it.materialId || null, status: 'Active', declineComment: '', sapId: null
+            })),
+            // bulk creates carry no Inventory stage — the Inventory team maintains
+            // inventory data directly on the created records
+            stages: buildStages(opts.type, { mrpType: 'ND' }),
+            aiFeedback: [],
+            status: 'In Review',
+            currentStageIndex: 0,
+            history: [],
+            createdTs: Date.now()
+        };
+        window.Store.set(s2 => {
+            s2.seq = s2.seq || { req: 0 };
+            s2.seq.req += 1;
+            req.no = s2.seq.req;
+            s2.requests.unshift(req);
+            pushHistory(req, { actorRole: 'Requester', actorUser: s.currentUser, action: 'submitted',
+                text: `Submitted ${req.title.toLowerCase()}` });
+            autoAdvance(req);
+        });
+        return req;
+    }
+
+    function bulkActiveItems(req) { return (req.items || []).filter(it => it.status === 'Active'); }
+
+    /* ---- act on a bulk request: approve the given keys, decline the remaining
+       active items (comment covers all declined). Caller validates inputs. ---- */
+    function actBulk(req, opts) {
+        // opts: { approveKeys: [], comment: '', perItem: { key: {field: value} } }
+        const s = window.Store.session();
+        const st = currentStage(req);
+        if (!st) return;
+        window.Store.set(() => {
+            const approve = new Set(opts.approveKeys || []);
+            const perItem = opts.perItem || {};
+            const active = bulkActiveItems(req);
+            const declined = [];
+            active.forEach(it => {
+                if (approve.has(it.key)) {
+                    if (perItem[it.key]) Object.assign(it.payload, perItem[it.key]);
+                } else {
+                    it.status = 'Declined';
+                    it.declineComment = opts.comment || '';
+                    declined.push(it);
+                }
+            });
+            const approvedCount = active.length - declined.length;
+            pushHistory(req, {
+                actorRole: s.currentRole, actorUser: s.currentUser,
+                action: declined.length && !approvedCount ? 'declined' : 'approved',
+                text: (approvedCount ? `Approved ${approvedCount}` : 'Approved 0') +
+                      (declined.length ? `, declined ${declined.length}` : '') + ' item(s) at ' + st.label,
+                comment: opts.comment
+            });
+            if (declined.length) {
+                notify({ title: 'Items declined in your bulk request',
+                    body: `${reqNo(req)} “${req.title}” — ${declined.length} item(s) declined at ${st.label} by ${s.currentRole}.`,
+                    kind: 'danger', requestId: req.id, forRole: req.requesterRole });
+            }
+            if (!approvedCount) { req.status = 'Declined'; return; }
+            // category batches are applied to the catalog on Central approval
+            if (req.type === 'category' && st.key === 'central') {
+                bulkActiveItems(req).forEach(it => applyCategory({ id: req.id, payload: it.payload }));
+            }
+            req.currentStageIndex += 1;
+            if (isActive(req)) autoAdvanceBulk(req);
+        });
+    }
+
+    function autoAdvanceBulk(req) {
+        let st = currentStage(req);
+        while (st && st.system && isActive(req)) { runBulkSystemStage(req); st = currentStage(req); }
+        if (!isActive(req)) return;
+        if (!currentStage(req)) { finish(req); return; }
+        const nst = currentStage(req);
+        if (nst && !nst.system) {
+            notify({
+                title: nst.key === 'requester_approval' ? 'Bulk request — your approval needed' : 'Bulk request in your queue',
+                body: `${reqNo(req)} “${req.title}” from ${req.requesterUser} — ${bulkActiveItems(req).length} item(s) awaiting ${nst.label}.`,
+                kind: 'info', requestId: req.id, forRole: nst.role
+            });
+        }
+    }
+
+    /* ---- bulk SAP stage: process every remaining active item ---- */
+    function runBulkSystemStage(req) {
+        const active = bulkActiveItems(req);
+        active.forEach(it => {
+            const sapId = it.sapId || fakeSAP();
+            it.sapId = sapId;
+            if (req.type === 'create') {
+                const p = it.payload;
+                if (window.AI && window.AI.structuredDesc && /[a-z]/.test(p.shortName || '')) {
+                    if (!p.name || p.name === p.shortName) p.name = p.shortName;
+                    const sd = window.AI.structuredDesc(p);
+                    p.shortName = sd.shortName;
+                    p.longDesc = sd.longDesc;
+                }
+                const id = window.Store.uid('mat');
+                const mat = Object.assign({
+                    id, dmpId: String(1600 + window.Store.materials().length + 1), sapId,
+                    itemStatus: 'Approved', blockStatus: null, requestStatus: 'Approved',
+                    plants: (p.plants && p.plants.length) ? p.plants.slice() : [req.requesterPlant],
+                    image: p.image || '', changelog: []
+                }, materialFromPayload(p));
+                if (window.I18N && window.I18N.stampItemAz) window.I18N.stampItemAz(mat);
+                window.Store.materials().unshift(mat);
+                it.materialId = id;
+                logChange(mat, req, []);
+            } else if (req.type === 'extend') {
+                const m = window.Store.materialById(it.materialId);
+                if (m && req.requesterPlant && m.plants.indexOf(req.requesterPlant) === -1) {
+                    const before = m.plants.join(', ');
+                    m.plants.push(req.requesterPlant);
+                    // one changelog entry per item — keyed by request+item so they don't merge
+                    if (!m.changelog) m.changelog = [];
+                    m.changelog.push({ reqId: req.id + ':' + it.key, ts: Date.now(),
+                        user: req.requesterUser, role: req.requesterRole || 'Requester',
+                        action: typeLabel(req.type) + ' (bulk) — ' + reqNo(req),
+                        changes: [{ field: 'Plants', from: before, to: m.plants.join(', ') }] });
+                    m.sapId = m.sapId || sapId;
+                }
+            }
+        });
+        pushHistory(req, { actorRole: 'System', actorUser: 'SAP', action: 'completed',
+            text: `SAP processed ${active.length} item(s)` });
+        notify({ title: 'Bulk request processed by SAP',
+            body: `${reqNo(req)} “${req.title}” — ${active.length} item(s) ${req.type === 'create' ? 'created' : 'extended'} in SAP.`,
+            kind: 'success', requestId: req.id, forRole: req.requesterRole });
+        req.currentStageIndex += 1;
     }
 
     /* ---- requester resubmits a declined request ---- */
@@ -262,7 +452,7 @@
         const verb = { create: 'created', amend: 'updated', extend: 'extended to your plant', block: 'blocked at plant level',
             reactivate: 'reactivated', block_proc: 'blocked for procurement', block_total: 'totally blocked', unblock_central: 'unblocked',
             valuation: 'updated (valuation class)', inventory_update: 'updated (inventory data)' }[req.type] || 'processed';
-        notify({ title: 'Record successfully ' + verb, body: `“${req.title}” — SAP ID ${sapId}.`, kind: 'success', requestId: req.id });
+        notify({ title: 'Record successfully ' + verb, body: `“${req.title}” — SAP ID ${sapId}.`, kind: 'success', requestId: req.id, forRole: req.requesterRole });
         req.currentStageIndex += 1;
     }
 
@@ -295,6 +485,7 @@
         shortName: 'Short name', longDesc: 'Long description', matTypeChoice: 'Material type',
         manufacturer: 'Manufacturer', mfrPartNo: 'Manufacturer part #', unspsc: 'UNSPSC code',
         unspscLabel: 'Category', materialGroup: 'Material Group', baseUom: 'Base UoM',
+        poUnit: 'PO unit',
         storageLocation: 'Storage location', mrpEnabled: 'MRP planning enabled',
         batchManaged: 'Batch-managed', mrpType: 'MRP type', recordType: 'Record type',
         valuationClass: 'Valuation class'
@@ -305,6 +496,7 @@
         Object.keys(MAT_FIELD_LABELS).forEach(k => { snap[k] = m[k]; });
         snap.attributes = Object.assign({}, m.attributes || {});
         snap.image = m.image || '';
+        snap.documents = (m.documents || []).map(d => d.name).join(', ');
         snap.plants = (m.plants || []).join(', ');
         return snap;
     }
@@ -321,6 +513,8 @@
             if (a !== b) changes.push({ field: 'Attribute — ' + k, from: a, to: b });
         });
         if (str(before.image) !== str(m.image || '')) changes.push({ field: 'Item photo', from: before.image ? '(previous photo)' : '', to: (m.image ? '(new photo)' : '') });
+        const docsNow = (m.documents || []).map(d => d.name).join(', ');
+        if (str(before.documents) !== docsNow) changes.push({ field: 'Supporting documents', from: str(before.documents) || '—', to: docsNow || '—' });
         const plantsNow = (m.plants || []).join(', ');
         if (str(before.plants) !== plantsNow) changes.push({ field: 'Plants', from: str(before.plants), to: plantsNow });
         return changes;
@@ -395,8 +589,9 @@
         if (existing) {
             existing.label = p.categoryName || existing.label;
             existing.attributes = attrs;
+            if (p.materialGroup) existing.materialGroup = p.materialGroup;
         } else {
-            ds.CATEGORY_ATTRIBUTES.push({ unspsc: p.unspsc, label: p.categoryName, attributes: attrs, addedByRequest: true });
+            ds.CATEGORY_ATTRIBUTES.push({ unspsc: p.unspsc, label: p.categoryName, materialGroup: p.materialGroup || '', attributes: attrs, addedByRequest: true });
         }
         if (window.I18N && window.I18N.syncDynamic) window.I18N.syncDynamic();
         notify({ title: 'New category added to the catalog',
@@ -421,14 +616,17 @@
             manufacturer: p.manufacturer, mfrPartNo: p.mfrPartNo,
             unspsc: p.unspsc, unspscLabel: p.unspscLabel, category: p.category,
             materialGroup: p.materialGroup,
-            baseUom: p.baseUom, storageLocation: p.storageLocation,
+            baseUom: p.baseUom, poUnit: p.poUnit, storageLocation: p.storageLocation,
             mrpEnabled: p.mrpEnabled, batchManaged: p.batchManaged, mrpType: p.mrpType,
             valuationClass: p.valuationClass, recordType: p.recordType,
             attributes: p.attributes || {},
-            image: p.image || ''
+            image: p.image || '',
+            documents: (p.documents || []).map(d => Object.assign({}, d))
         };
+        // a payload from an older flow without a documents field keeps the item's existing ones
+        if (!p.documents) delete out.documents;
         if (p.plants && p.plants.length) out.plants = p.plants.slice();
-        // amends carry no Finance step — keep the item's existing valuation class
+        // amends carry no Accounting step — keep the item's existing valuation class
         // when the payload doesn't provide one
         if (!p.valuationClass) delete out.valuationClass;
         return out;
@@ -451,6 +649,8 @@
 
     window.Workflow = {
         stagesFor, buildStages, typeLabel, currentStage, isAwaiting,
-        createRequest, act, resubmit, fakeSAP, reqNo, deleteDraft, CHAINS
+        createRequest, act, resubmit, fakeSAP, reqNo, deleteDraft, CHAINS,
+        createBulkRequest, actBulk, bulkActiveItems,
+        autoAdvance   // used by store.js migrations to run pending system stages
     };
 })();

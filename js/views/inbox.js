@@ -73,7 +73,9 @@
         const stages = window.Workflow.stagesFor(req);
         if (!stages.length || req.status === 'Draft') return '';
         const idx = req.currentStageIndex;
-        return `<div class="mini-track">${stages.map((s, i) => {
+        // first dot mirrors the tracker's "Request created" step — always done once submitted
+        const created = `<span class="mt-dot done" title="${esc('Request created — ' + req.requesterUser)}"></span>`;
+        return `<div class="mini-track">${created}${stages.map((s, i) => {
             let cls = '';
             if (req.status === 'Completed') cls = 'done';
             else if (req.status === 'Declined' && i === idx) cls = 'declined';
@@ -200,6 +202,7 @@
             const mine = all.filter(r => r.requesterUser === s.currentUser);
             tabs = [
                 { key: 'all', label: 'All', rows: mine },
+                { key: 'myapproval', label: 'Awaiting my approval', rows: mine.filter(r => window.Workflow.isAwaiting(r, 'Requester')) },
                 { key: 'review', label: 'In review', rows: mine.filter(r => r.status === 'In Review') },
                 { key: 'declined', label: 'Needs fix', rows: mine.filter(r => r.status === 'Declined') },
                 { key: 'draft', label: 'Drafts', rows: mine.filter(r => r.status === 'Draft') },

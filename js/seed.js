@@ -173,9 +173,9 @@
 
     /* ---- Users (managed by Central team) ---- */
     const USERS = [
-        { id: 'u1', name: 'Arif Khalaf', email: 'arif.khalaf@dmp.az', role: 'Requester', plants: ['1700'], status: 'Active' },
+        { id: 'u1', name: 'Arif Khalaf', email: 'arif.khalaf@dmp.az', role: 'Requester', plants: ['1700', '1004', '3000'], status: 'Active' },
         { id: 'u2', name: 'Leyla Mammadova', email: 'leyla.mammadova@dmp.az', role: 'Technical SME', plants: ['1700', '3000'], status: 'Active' },
-        { id: 'u3', name: 'Rashad Aliyev', email: 'rashad.aliyev@dmp.az', role: 'Finance', plants: ['3000'], status: 'Active' },
+        { id: 'u3', name: 'Rashad Aliyev', email: 'rashad.aliyev@dmp.az', role: 'Accounting', plants: ['3000'], status: 'Active' },
         { id: 'u4', name: 'Nigar Huseynova', email: 'nigar.huseynova@dmp.az', role: 'MDM Specialist', plants: ['1700', '3100', '3200'], status: 'Active' },
         { id: 'u5', name: 'Elvin Qasimov', email: 'elvin.qasimov@dmp.az', role: 'Central team', plants: ['1700', '3000', '3700', '3100', '3104', '3106', '3200'], status: 'Active' },
         { id: 'u6', name: 'Aysel Karimova', email: 'aysel.karimova@dmp.az', role: 'Inventory team', plants: ['1700'], status: 'Active' }
@@ -185,9 +185,9 @@
     const MATERIAL_TYPE_CHOICES = ['OEM','Generic','Engineered','Commercial'];
 
     /* ---- Roles ---- */
-    const ROLES = ['Requester','Technical SME','Finance','MDM Specialist','Central team','Inventory team'];
+    const ROLES = ['Requester','Technical SME','Accounting','MDM Specialist','Central team','Inventory team'];
 
-    /* ---- Valuation classes (Finance) ---- */
+    /* ---- Valuation classes (Accounting) ---- */
     const VALUATION_CLASSES = [
         { code: '3000', desc: 'Raw materials' },
         { code: '3100', desc: 'Goods for resale' },

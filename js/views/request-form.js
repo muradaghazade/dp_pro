@@ -9,6 +9,18 @@
     function ds() { return window.Store.get().datasets; }
     function groupOptions() { return ds().MATERIAL_GROUPS.map(g => ({ value: g.code, label: g.code + ' — ' + g.desc })); }
     function plantOptions() { return ds().PLANTS.map(p => ({ value: p.code, label: p.code + ' — ' + p.name })); }
+    // plants the current user is assigned to (managed on the Users page); when
+    // amending, plants already on the item stay selectable so an amend can never
+    // silently drop an existing plant assignment
+    function accessiblePlants(payload) {
+        const s = window.Store.session();
+        const u = (window.Store.get().users || []).find(x => x.name === s.currentUser);
+        const codes = new Set((u && u.plants && u.plants.length) ? u.plants : [s.plant]);
+        ((payload && payload.plants) || []).forEach(c => codes.add(c));
+        if (payload && payload.plant) codes.add(payload.plant);
+        return ds().PLANTS.filter(p => codes.has(p.code));
+    }
+
     function storageFieldHtml(plant, value) {
         if (!plant) return F({ label: 'Storage location', name: 'storageLocation', type: 'select', value: '',
                    options: [], required: true, disabled: true, placeholder: 'Select a plant first',
@@ -20,11 +32,26 @@
 
     /* ---------------- entry ---------------- */
     window.Views.requestForm = function (query) {
-        const draft = window.Views._draft;
+        let draft = window.Views._draft;
         const type = (draft && draft.type) || (query && query.type) || 'create';
+        // refresh-safe: the in-memory draft is gone after a page reload — rebuild
+        // the item context from the ?mat= parameter carried in the URL
+        if (!draft && query && query.mat && window.Store.materialById(query.mat)) {
+            draft = window.Views._draft = { type, materialId: query.mat };
+        }
         if (type === 'extend' || type === 'block' || type === 'reactivate') return confirmView(type, draft);
         return editView(type, draft);
     };
+
+    /* ---- supporting documents attached in the form (persisted on the payload) ---- */
+    let formDocs = [];
+    const DOC_EXT = ['png', 'jpg', 'jpeg', 'pdf', 'svg', 'xls', 'doc', 'docx', 'csv'];
+    function renderDocs(root) {
+        const list = root.querySelector('#doc-list');
+        const count = root.querySelector('#doc-count');
+        if (list) list.innerHTML = window.UI.docListHtml(formDocs, { deletable: true });
+        if (count) count.textContent = `${formDocs.length} file(s) selected`;
+    }
 
     /* ================= CREATE / AMEND editable form ================= */
     function editView(type, draft) {
@@ -88,6 +115,17 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="field col-span-3">
+                            <label>Supporting documents</label>
+                            <div class="hint" style="font-style:italic;margin-bottom:2px">Allowed formats: PNG, JPG, JPEG, PDF, SVG, XLS, DOC, DOCX, CSV. Maximum file size: 10MB</div>
+                            <input type="file" id="doc-file" multiple hidden
+                                accept=".png,.jpg,.jpeg,.pdf,.svg,.xls,.doc,.docx,.csv">
+                            <div class="doc-attach-row">
+                                <button type="button" class="btn btn-outline" data-act="attach-doc">Attach File</button>
+                                <span class="muted" id="doc-count"></span>
+                            </div>
+                            <div id="doc-list"></div>
+                        </div>
 
                         <div class="rf-section"><span class="rf-step">2</span><span class="t">Classification</span><span class="rule"></span></div>
                         ${F({ label: 'Material Type', name: 'materialType', value: 'ROH', readonly: true, hint: 'Fixed for Demand Planning' })}
@@ -106,19 +144,50 @@
                         ${F({ label: 'MRP planning enabled?', name: 'mrpEnabled', type: 'radio', value: payload.mrpEnabled, options: ['Yes', 'No'], required: true })}
                         ${F({ label: 'Batch-managed?', name: 'batchManaged', type: 'radio', value: payload.batchManaged, options: ['Yes', 'No'], required: true })}
                         ${F({ label: 'Record type', name: 'recordType', type: 'radio', value: payload.recordType, options: ['Golden record', 'Sourcing record'], required: true })}
-                        <div class="field col-span-3"><label>Plants<span class="req">*</span> <span class="muted" style="font-weight:400;font-size:12px">(select one or more)</span></label>
+                        <div class="field col-span-3"><label class="req-label">Plants<span class="req">*</span> <span class="muted" style="font-weight:400;font-size:12px">(select one or more)</span></label>
                             <input type="text" class="form-input plants-filter" id="plants-filter" placeholder="Search plants…">
                             <div class="checkbox-group plants-picker plants-picker-wide" id="plants-picker">
-                                ${ds().PLANTS.map(pl => `<label class="checkbox-label"><input type="checkbox" class="rf-plant" value="${pl.code}" ${((payload.plants && payload.plants.length ? payload.plants : (payload.plant ? [payload.plant] : []))).indexOf(pl.code) !== -1 ? 'checked' : ''}> ${pl.code} — ${esc(pl.name)}</label>`).join('')}
+                                ${accessiblePlants(payload).map(pl => `<label class="checkbox-label"><input type="checkbox" class="rf-plant" value="${pl.code}" ${((payload.plants && payload.plants.length ? payload.plants : (payload.plant ? [payload.plant] : []))).indexOf(pl.code) !== -1 ? 'checked' : ''}> ${pl.code} — ${esc(pl.name)}</label>`).join('')}
                             </div>
                             <div class="field-error" data-err="plant"></div>
                         </div>
                     </div>
 
                     <div class="rf-section" style="margin-top:28px"><span class="rf-step">4</span><span class="t">Technical attributes</span><span class="note">defined by the selected category${aiFilled ? ' · values prefilled by AI' : ''}</span><span class="rule"></span></div>
-                    <div class="form-grid" id="attr-zone">${attrZoneInner(payload.unspsc, payload.attributes)}</div>
+                    <div class="form-grid" id="attr-zone">${attrZoneInner(payload.unspsc, payload.attributes, payload.recordType === 'Sourcing record')}</div>
                 </form>
             </div>`;
+
+        // supporting documents
+        formDocs = (payload.documents || []).map(d => Object.assign({}, d));
+        renderDocs(root);
+        const docInput = root.querySelector('#doc-file');
+        if (docInput) docInput.addEventListener('change', e => {
+            [...(e.target.files || [])].forEach(f => {
+                const ext = (f.name.split('.').pop() || '').toLowerCase();
+                if (DOC_EXT.indexOf(ext) === -1) {
+                    window.UI.toast({ title: 'Format not allowed', body: `“${f.name}” — allowed formats: ${DOC_EXT.join(', ').toUpperCase()}.`, kind: 'danger' });
+                    return;
+                }
+                if (f.size > 10 * 1024 * 1024) {
+                    window.UI.toast({ title: 'File too large', body: `“${f.name}” exceeds the 10MB limit.`, kind: 'danger' });
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = () => {
+                    formDocs.push({ name: f.name, size: f.size, type: f.type || '', data: reader.result });
+                    renderDocs(root);
+                };
+                reader.readAsDataURL(f);
+            });
+            e.target.value = '';
+        });
+        root.addEventListener('click', e => {
+            const del = e.target.closest && e.target.closest('[data-doc-del]');
+            if (!del) return;
+            formDocs.splice(Number(del.getAttribute('data-doc-del')), 1);
+            renderDocs(root);
+        });
 
         // image upload
         const fileInput = root.querySelector('#img-file');
@@ -156,6 +225,10 @@
             root.querySelector('[name="materialDescription"]').value = window.UI.groupDesc(e.target.value);
         });
         // live: category → UNSPSC mirror + attribute set (preserving any shared values)
+        const isSourcing = () => {
+            const r = root.querySelector('input[name="recordType"]:checked');
+            return !!r && r.value === 'Sourcing record';
+        };
         root.querySelector('[name="unspsc"]').addEventListener('change', e => {
             const unspsc = e.target.value;
             const mirror = root.querySelector('[name="unspscMirror"]'); if (mirror) mirror.value = unspsc;
@@ -163,14 +236,20 @@
             const schema = window.UI.categorySchema(unspsc);
             if (labelInput) labelInput.value = schema ? schema.label : '';
             const current = readAttrInputs(root);
-            root.querySelector('#attr-zone').innerHTML = attrZoneInner(unspsc, current);
+            root.querySelector('#attr-zone').innerHTML = attrZoneInner(unspsc, current, isSourcing());
         });
+        // live: record type → sourcing records need no mandatory technical attributes
+        root.querySelectorAll('input[name="recordType"]').forEach(r => r.addEventListener('change', () => {
+            const current = readAttrInputs(root);
+            root.querySelector('#attr-zone').innerHTML = attrZoneInner(root.querySelector('[name="unspsc"]').value, current, isSourcing());
+        }));
 
         window.UI.bindActions(root, {
             'back': () => history.length > 1 ? history.back() : window.UI.go('#/master'),
             'process': () => doProcess(type, materialId, draft),
             'submit': () => doSubmit(type, materialId, draft),
             'choose-img': () => { const fi = root.querySelector('#img-file'); if (fi) fi.click(); },
+            'attach-doc': () => { const fi = root.querySelector('#doc-file'); if (fi) fi.click(); },
             'remove-img': () => setFormImage(root, ''),
             'draft': () => { const p = collect(); const dr = window.Workflow.createRequest({ type, payload: p, materialId, draft: true, aiFeedback: [] });
                 window.UI.toast({ title: 'Saved as draft', body: 'Find it in your Inbox → Drafts.' });
@@ -188,10 +267,11 @@
     }
     function numPart(v) { const n = parseFloat(String(v === undefined || v === null ? '' : v).replace(',', '.')); return isNaN(n) ? '' : n; }
 
-    function attrField(a, val) {
+    function attrField(a, val, forceOptional) {
         const name = 'attr::' + a.name;
         const t = a.fieldType || 'Text';
-        const label = `${esc(a.name)}${a.uom ? ` <span class="attr-uom">(${esc(a.uom.toLowerCase())})</span>` : ''}${a.mandatory ? '<span class="req">*</span>' : ''}`;
+        const mandatory = a.mandatory && !forceOptional;
+        const label = `${esc(a.name)}${a.uom ? ` <span class="attr-uom">(${esc(a.uom.toLowerCase())})</span>` : ''}${mandatory ? '<span class="req">*</span>' : ''}`;
         let control;
         if (t === 'Number') {
             control = `<input class="form-input ai-filled" type="number" step="any" name="${name}" value="${esc(numPart(val))}">`;
@@ -216,7 +296,7 @@
         } else {
             control = `<input class="form-input ai-filled" type="text" name="${name}" value="${esc(val || '')}">`;
         }
-        return `<div class="field"><label>${label}</label>${control}<div class="field-error" data-err="${name}"></div></div>`;
+        return `<div class="field"><label class="${mandatory ? 'req-label' : ''}">${label}</label>${control}<div class="field-error" data-err="${name}"></div></div>`;
     }
 
     // strip a trailing uom from an AI-prefilled value so typed controls can use it
@@ -229,11 +309,12 @@
     }
 
     // render attribute inputs for the category's schema (or a hint when none)
-    function attrZoneInner(unspsc, values) {
+    function attrZoneInner(unspsc, values, sourcing) {
         values = values || {};
         const schema = window.UI.categorySchema(unspsc);
         if (schema) {
-            return schema.attributes.map(a => attrField(a, attrValueFor(a, values))).join('');
+            // sourcing records don't require technical attributes — render all as optional
+            return schema.attributes.map(a => attrField(a, attrValueFor(a, values), sourcing)).join('');
         }
         const extra = Object.keys(values).length
             ? Object.entries(values).map(([k, v]) => F({ label: k, name: 'attr::' + k, value: v, aiFilled: true })).join('')
@@ -304,7 +385,8 @@
             storageLocation: p.storageLocation || '',
             mrpEnabled: p.mrpEnabled || '', batchManaged: p.batchManaged || '', mrpType: p.mrpType || '',
             recordType: p.recordType || '', valuationClass: '',
-            attributes: attrs, image: p.image || ''
+            attributes: attrs, image: p.image || '',
+            documents: formDocs.map(d => Object.assign({}, d))
         };
     }
 
@@ -427,14 +509,22 @@
     }
 
     /* ================= EXTEND / BLOCK / REACTIVATE confirm ================= */
+    function cfmRow(label, val, span) {
+        return `<div class="def-row ${span ? 'span-2' : ''}"><div class="def-k">${esc(label)}</div><div class="def-v">${esc((val === undefined || val === null || val === '') ? '—' : val)}</div></div>`;
+    }
     function confirmView(type, draft) {
         const root = document.getElementById('view');
         const m = draft && draft.materialId ? window.Store.materialById(draft.materialId) : null;
         if (!m) { root.innerHTML = `<div class="page-narrow"><div class="empty-state">No item selected.</div></div>`; return; }
         const s = window.Store.session();
+        // extend: the requester picks WHICH of their plants to extend to — only
+        // plants they have access to and the item is not already in
+        const extendTargets = type === 'extend'
+            ? accessiblePlants(null).filter(pl => (m.plants || []).indexOf(pl.code) === -1)
+            : [];
         const cfg = {
             extend: { title: 'Request for item extension', cta: 'Submit extension',
-                note: `This item exists in plant <strong>${esc(m.plants[0])}</strong>. It will be extended to your plant <strong>${esc(s.plant)}</strong>. No approval is required — the system will call SAP immediately.` },
+                note: `This item exists in plant${m.plants.length > 1 ? 's' : ''} <strong>${esc(m.plants.join(', '))}</strong>. Select the plant to extend it to below — the extension requires MDM Specialist approval before SAP is updated.` },
             block: { title: 'Request to block item (plant level)', cta: 'Submit block request',
                 note: `This will request blocking <strong>${esc(m.name)}</strong> at plant <strong>${esc(s.plant)}</strong>. It requires MDM Specialist approval before SAP is updated.` },
             reactivate: { title: 'Request to reactivate item', cta: 'Submit reactivation',
@@ -446,45 +536,79 @@
                 <div class="back-link" data-act="back">‹ Back</div>
                 <div class="form-header">
                     <div class="form-actions">
-                        <button class="btn btn-green" data-act="submit">${cfg.cta}</button>
+                        ${type === 'extend' && !extendTargets.length ? '' : `<button class="btn btn-green" data-act="submit">${cfg.cta}</button>`}
                         <button class="btn btn-outline" data-act="back">Cancel</button>
                     </div>
                 </div>
                 <h2 class="form-page-title">${esc(cfg.title)}</h2>
                 <div class="banner ${type === 'extend' ? 'match' : 'warn'}"><span class="banner-icon">ℹ️</span><div class="banner-body">${cfg.note}</div></div>
 
-                ${type === 'extend' ? `<div class="result-block"><div class="rb-head">
-                    <div><div class="k muted" style="font-size:11px;text-transform:uppercase">Source plant (extend from)</div>
-                        <div class="rb-title">${esc(window.UI.plantLabel(m.plants[0]))}</div></div>
+                ${type === 'extend' ? (extendTargets.length ? `<div class="result-block"><div class="rb-head">
+                    <div><div class="k muted" style="font-size:11px;text-transform:uppercase">Source plant${m.plants.length > 1 ? 's' : ''} (extend from)</div>
+                        <div class="rb-title">${m.plants.map(pc => esc(window.UI.plantLabel(pc))).join('<br>')}</div></div>
                     <div style="font-size:22px">→</div>
-                    <div style="text-align:right"><div class="k muted" style="font-size:11px;text-transform:uppercase">Target plant (extend to)</div>
-                        <div class="rb-title">${esc(window.UI.plantLabel(s.plant))}</div></div>
-                </div></div>` : ''}
+                    <div style="min-width:320px">${F({ label: 'Target plant (extend to)', name: 'extendPlant', type: 'select',
+                        value: '', options: extendTargets.map(pl => ({ value: pl.code, label: pl.code + ' — ' + pl.name })),
+                        required: true, placeholder: 'Select plant…', hint: 'Plants you have access to' })}</div>
+                </div></div>` : `<div class="banner warn"><span class="banner-icon">⚠️</span><div class="banner-body">
+                    This item already exists in all plants you have access to — there is no plant to extend it to.
+                    Plant access is managed by the Central team on the User management page.</div></div>`) : ''}
 
-                <div class="section-title">Technical specifications</div>
-                <div class="detail-meta" style="margin-bottom:16px">
-                    <div><span class="muted">Short name - </span>${esc(m.shortName || '—')}</div>
-                    <div><span class="muted">Long description - </span>${esc(m.longDesc || '—')}</div>
-                    <div><span class="muted">Manufacturer - </span>${esc(m.manufacturer || '—')} · <span class="muted">Part # - </span>${esc(m.mfrPartNo || '—')}</div>
-                    <div><span class="muted">UNSPSC - </span>${esc(m.unspsc)} · <span class="muted">SAP ID - </span>${esc(m.sapId || '—')} · <span class="muted">Base UoM - </span>${esc(m.baseUom)}</div>
+                <div class="panel-card">
+                    <div class="pc-title">Item summary</div>
+                    <div class="cfm-item">
+                        ${m.image ? `<div class="cfm-item-img"><img src="${esc(m.image)}" alt=""></div>` : ''}
+                        <div class="def-grid cfm-item-grid">
+                            ${cfmRow('Short name', m.shortName)}
+                            ${cfmRow('SAP ID', m.sapId)}
+                            ${cfmRow('Manufacturer', m.manufacturer)}
+                            ${cfmRow('Part #', m.mfrPartNo)}
+                            ${cfmRow('Category · UNSPSC', (m.unspscLabel || m.category || '') + (m.unspsc ? ' · ' + m.unspsc : ''))}
+                            ${cfmRow('Material group', m.materialGroup ? m.materialGroup + (window.UI.groupDesc(m.materialGroup) ? ' — ' + window.UI.groupDesc(m.materialGroup) : '') : '')}
+                            ${cfmRow('Base UoM', m.baseUom)}
+                            ${cfmRow('PO unit', m.poUnit)}
+                            ${cfmRow('Long description', m.longDesc, true)}
+                        </div>
+                    </div>
+                    <div class="mc-plants cfm-plants"><span class="plants-label">Plant${(m.plants || []).length > 1 ? 's' : ''} - </span>
+                        ${(m.plants || []).map(pc => `<span class="plant-chip">${esc(window.UI.plantLabel(pc))}</span>`).join('')}</div>
+                    <div class="cfm-attrs">
+                        <div class="cfm-attrs-title">Technical attributes</div>
+                        ${Object.keys(m.attributes || {}).length
+                            ? `<div class="attr-tiles">${Object.entries(m.attributes).map(([k, v]) =>
+                                `<div class="attr-tile"><div class="at-k">${esc(k)}</div><div class="at-v">${esc(v)}</div></div>`).join('')}</div>`
+                            : '<div class="muted">No attributes.</div>'}
+                    </div>
                 </div>
-                <div style="font-weight:600;margin-bottom:12px">Item attributes</div>
-                ${window.UI.techGrid(m.attributes)}
             </div>`;
 
         window.UI.bindActions(root, {
             'back': () => window.UI.go('#/item/' + m.id),
             'submit': () => {
-                const req = window.Workflow.createRequest({ type, payload: payloadFromMaterial(m), materialId: m.id });
+                let requesterPlant;
+                if (type === 'extend') {
+                    // the target plant is mandatory
+                    const sel = root.querySelector('[name="extendPlant"]');
+                    requesterPlant = sel ? sel.value : '';
+                    if (!requesterPlant) {
+                        if (sel) {
+                            sel.classList.add('error');
+                            const w = sel.closest('.search-select');
+                            const t = w && w.querySelector('.ss-toggle');
+                            if (t) t.classList.add('error');
+                        }
+                        const err = root.querySelector('[data-err="extendPlant"]');
+                        if (err) err.textContent = 'Please select the plant to extend to.';
+                        window.UI.toast({ title: 'Target plant required', body: 'Select the plant to extend this item to.', kind: 'danger' });
+                        return;
+                    }
+                }
+                const req = window.Workflow.createRequest({ type, payload: payloadFromMaterial(m), materialId: m.id, requesterPlant });
                 const fromBulk = draft && draft.fromBulk ? draft.fromBulk : null;
                 window.Views._draft = null;
-                if (type === 'extend') {
-                    window.UI.toast({ title: 'Item extended', body: 'SAP ID ' + req.sapId + ' — “' + (m.shortName || m.name) + '” is now available in Plant ' + s.plant + '.', kind: 'info' });
-                } else {
-                    window.UI.toast({ title: 'Request submitted', body: 'Sent to MDM Specialist for review.', kind: 'info' });
-                }
+                window.UI.toast({ title: 'Request submitted', body: 'Sent to MDM Specialist for review.', kind: 'info' });
                 if (fromBulk) {
-                    window.Views.bulkMarkAction(fromBulk.batch, fromBulk.i, type === 'extend' ? 'Extended — SAP ID ' + req.sapId : 'Submitted — ' + window.Workflow.reqNo(req));
+                    window.Views.bulkMarkAction(fromBulk.batch, fromBulk.i, 'Submitted — ' + window.Workflow.reqNo(req));
                     window.UI.go('#/bulk/' + fromBulk.batch);
                     return;
                 }
@@ -507,12 +631,13 @@
             matTypeChoice: m.matTypeChoice, manufacturer: m.manufacturer, mfrPartNo: m.mfrPartNo,
             unspsc: m.unspsc, unspscLabel: m.unspscLabel, category: m.category, materialGroup: m.materialGroup,
             materialDescription: window.UI.groupDesc(m.materialGroup),
-            baseUom: m.baseUom,
+            baseUom: m.baseUom, poUnit: m.poUnit,
             plants: (m.plants || []).slice(),
             plant: (m.plants && m.plants[0]) || window.Store.session().plant,
             storageLocation: m.storageLocation, mrpEnabled: m.mrpEnabled, batchManaged: m.batchManaged,
             mrpType: m.mrpType, recordType: m.recordType, valuationClass: m.valuationClass,
-            attributes: Object.assign({}, m.attributes), image: m.image
+            attributes: Object.assign({}, m.attributes), image: m.image,
+            documents: (m.documents || []).map(d => Object.assign({}, d))
         };
     }
 })();

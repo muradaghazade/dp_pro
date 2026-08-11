@@ -175,10 +175,28 @@
         return '';
     }
 
+    /* ---- one-click bulk submission: all rows sharing the same needed action
+       are submitted together as ONE bulk request for the approval chain ---- */
+    function bulkActionsHtml(items) {
+        const pend = (o) => items.filter(x => x.outcome === o && !x.row.actionTaken);
+        const creates = pend('not_found').length;
+        const extends_ = pend('exists_other_plant').length;
+        const cats = pend('category_missing').length;
+        if (creates + extends_ + cats === 0) return '';
+        return `<div class="bulk-actions-bar">
+            <span class="bab-label">Bulk actions</span>
+            ${creates ? `<button class="btn btn-black btn-sm" data-act="bulk-all-create">Create all new items (${creates})</button>` : ''}
+            ${extends_ ? `<button class="btn btn-green btn-sm" data-act="bulk-all-extend">↗ Extend all to my plant (${extends_})</button>` : ''}
+            ${cats ? `<button class="btn btn-outline btn-sm" data-act="bulk-all-cat">Request all categories (${cats})</button>` : ''}
+            <span class="muted" style="font-size:12px">One request per action — approvers review the whole batch at once.</span>
+        </div>`;
+    }
+
     function resultsHtml(batch) {
         const items = batch.rows.map((r, i) => processRow(r, i));
         return `
             ${summaryHtml(items)}
+            ${bulkActionsHtml(items)}
             <table class="data-table bulk-table">
                 <thead><tr>
                     <th style="width:34px">#</th>
@@ -271,7 +289,7 @@
                 const x = processRow(batch.rows[i], i);
                 if (!x.match) return;
                 window.Views._draft = { type: 'extend', materialId: x.match.id, fromBulk: { batch: batch.id, i } };
-                window.UI.go('#/request/new?type=extend');
+                window.UI.go('#/request/new?type=extend&mat=' + x.match.id);
             },
             'bulk-view': (t) => {
                 const i = +t.getAttribute('data-i');
@@ -283,9 +301,44 @@
                 window.Views.bulkMarkAction(batch.id, i, 'Category requested from Data Steward');
                 window.UI.toast({ title: 'Request sent to Data Steward', body: 'A new-category request was raised for this item.', kind: 'info' });
                 window.Views.bulkDetail(batch.id);
-            }
+            },
+            'bulk-all-create': () => submitBulkAction(batch, 'not_found'),
+            'bulk-all-extend': () => submitBulkAction(batch, 'exists_other_plant'),
+            'bulk-all-cat': () => submitBulkAction(batch, 'category_missing')
         }));
     };
+
+    /* ---- submit ONE bulk request for every pending row with the given outcome ---- */
+    function submitBulkAction(batch, outcome) {
+        const rows = batch.rows.map((r, i) => processRow(r, i)).filter(x => x.outcome === outcome && !x.row.actionTaken);
+        if (!rows.length) return;
+        const type = { not_found: 'create', exists_other_plant: 'extend', category_missing: 'category' }[outcome];
+        const items = [];
+        rows.forEach(x => {
+            if (type === 'create') {
+                items.push({ desc: x.row.desc, payload: window.AI.toPayload(x.a) });
+            } else if (type === 'extend') {
+                if (!x.match) return;
+                items.push({ desc: x.row.desc, materialId: x.match.id,
+                    payload: { shortName: x.match.shortName, name: x.match.name, unspsc: x.match.unspsc, sapIdSource: x.match.sapId } });
+            } else {
+                const cs = x.a.categorySuggestion;
+                if (!cs) return;
+                items.push({ desc: x.row.desc, payload: Object.assign({ sourceText: x.row.desc,
+                    name: cs.categoryName, shortName: cs.categoryName }, JSON.parse(JSON.stringify(cs))) });
+            }
+        });
+        if (!items.length) return;
+        const req = window.Workflow.createBulkRequest({ type, items });
+        window.Store.set(s => {
+            const b = (s.bulkBatches || []).find(z => z.id === batch.id);
+            if (b) rows.forEach(x => { if (b.rows[x.i]) b.rows[x.i].actionTaken = 'Submitted in bulk — ' + window.Workflow.reqNo(req); });
+        });
+        const firstStage = window.Workflow.stagesFor(req)[0];
+        window.UI.toast({ title: 'Bulk request submitted',
+            body: window.Workflow.reqNo(req) + ' — ' + items.length + ' item(s) sent to ' + (firstStage ? firstStage.role : 'review') + '.', kind: 'info' });
+        window.UI.go('#/request/' + req.id);
+    }
 
     /* ---- shared bits ---- */
     function commonActions(root) {
