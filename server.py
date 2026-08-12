@@ -117,6 +117,17 @@ class Handler(SimpleHTTPRequestHandler):
         with open(tmp, "wb") as f:
             f.write(body)
         os.replace(tmp, STATE_FILE)
+        # keep the bundled snapshot (js/state-snapshot.js) in sync, so the repo
+        # always ships the same data the local app shows — even opened statically
+        try:
+            snap = os.path.join(ROOT, "js", "state-snapshot.js")
+            with open(snap + ".tmp", "wb") as f:
+                f.write(b"window.STATE_SNAPSHOT = ")
+                f.write(body)
+                f.write(b";")
+            os.replace(snap + ".tmp", snap)
+        except Exception:
+            pass
         resp = b'{"ok":true}'
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

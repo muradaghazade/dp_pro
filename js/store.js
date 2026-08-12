@@ -108,16 +108,25 @@
     function init() {
         state = load();
         if (!state || !state.__seeded) {
-            state = window.Seed.build();      // fresh seed
-            state.__seeded = true;
-            state.__freshSeed = true;         // must defer to any existing server-side state
-            state.__stampV = 2;               // honest save-stamps from the start
-            state.__spec10Cleanup = 2;        // fresh seeds already contain only the Spec10 master
-            state.__spec10V = 4;              // ...at the current (verbatim + images) data version
-            state.__mroV = 1;                 // ...with MRO-structured descriptions
-            state.__accountingV = 1;          // fresh seeds already use the Accounting role name
-            state.__stewardV = 1;             // ...and chains without the Steward review stage
-            state.__requesterNameV = 1;       // ...and the John Simpson requester name
+            // no local state: prefer the bundled snapshot (full demo data incl. items,
+            // photos and requests — works even when opened without the Python server),
+            // falling back to the bare seed when no snapshot is shipped
+            if (window.STATE_SNAPSHOT && window.STATE_SNAPSHOT.__seeded) {
+                state = JSON.parse(JSON.stringify(window.STATE_SNAPSHOT));
+                state.__freshSeed = true;     // any newer server-side copy still wins
+                migrate(state);
+            } else {
+                state = window.Seed.build();      // fresh seed
+                state.__seeded = true;
+                state.__freshSeed = true;         // must defer to any existing server-side state
+                state.__stampV = 2;               // honest save-stamps from the start
+                state.__spec10Cleanup = 2;        // fresh seeds already contain only the Spec10 master
+                state.__spec10V = 4;              // ...at the current (verbatim + images) data version
+                state.__mroV = 1;                 // ...with MRO-structured descriptions
+                state.__accountingV = 1;          // fresh seeds already use the Accounting role name
+                state.__stewardV = 1;             // ...and chains without the Steward review stage
+                state.__requesterNameV = 1;       // ...and the John Simpson requester name
+            }
         } else {
             migrate(state);                   // backfill keys added in newer versions
         }
