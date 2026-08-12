@@ -113,11 +113,14 @@
             // falling back to the bare seed when no snapshot is shipped
             if (window.STATE_SNAPSHOT && window.STATE_SNAPSHOT.__seeded) {
                 state = JSON.parse(JSON.stringify(window.STATE_SNAPSHOT));
+                state.__origin = 'snapshot';
+                state.__snapshotStamp = window.STATE_SNAPSHOT.__savedAt || 0;
                 state.__freshSeed = true;     // any newer server-side copy still wins
                 migrate(state);
             } else {
                 state = window.Seed.build();      // fresh seed
                 state.__seeded = true;
+                state.__origin = 'seed';
                 state.__freshSeed = true;         // must defer to any existing server-side state
                 state.__stampV = 2;               // honest save-stamps from the start
                 state.__spec10Cleanup = 2;        // fresh seeds already contain only the Spec10 master
@@ -129,6 +132,25 @@
             }
         } else {
             migrate(state);                   // backfill keys added in newer versions
+        }
+        // stale-default healing: a browser that saved the BARE seed before a data
+        // snapshot shipped (e.g. an early GitHub Pages visit) keeps showing default
+        // items forever — replace such pristine seeds with the bundled snapshot.
+        // Real user data (any requests, or non-seed materials) is never touched.
+        const snap = window.STATE_SNAPSHOT;
+        if (snap && snap.__seeded && state !== null) {
+            const pristineSeed = state.__origin === 'seed' ||
+                (state.__origin === undefined && !(state.requests || []).length &&
+                 (state.materials || []).every(m => String(m.id).indexOf('mat_s10_') === 0));
+            const newerSnapshot = state.__origin === 'snapshot' &&
+                (snap.__savedAt || 0) > (state.__snapshotStamp || 0);
+            if (pristineSeed || newerSnapshot) {
+                state = JSON.parse(JSON.stringify(snap));
+                state.__origin = 'snapshot';
+                state.__snapshotStamp = snap.__savedAt || 0;
+                state.__freshSeed = true;     // a newer server-side copy still wins
+                migrate(state);
+            }
         }
         // capture AFTER migrate — it may invalidate untrusted (inflated) stamps
         loadedSavedAt = state.__savedAt || 0;
