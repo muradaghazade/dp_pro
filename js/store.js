@@ -117,6 +117,7 @@
             state.__mroV = 1;                 // ...with MRO-structured descriptions
             state.__accountingV = 1;          // fresh seeds already use the Accounting role name
             state.__stewardV = 1;             // ...and chains without the Steward review stage
+            state.__requesterNameV = 1;       // ...and the John Simpson requester name
         } else {
             migrate(state);                   // backfill keys added in newer versions
         }
@@ -271,6 +272,24 @@
                 n.body = ren(n.body);
             });
             s.__accountingV = 1;
+        }
+        // rename (Aug 2026): demo requester Arif Khalaf → John Simpson, everywhere
+        // names appear in stored data (session, users, requests, notifications, logs)
+        if (s.__requesterNameV !== 1) {
+            const OLD = 'Arif Khalaf', NEW = 'John Simpson';
+            const ren = (t) => (typeof t === 'string' && t.indexOf(OLD) !== -1) ? t.split(OLD).join(NEW) : t;
+            if (s.session) s.session.currentUser = ren(s.session.currentUser);
+            (s.users || []).forEach(u => {
+                if (u.name === OLD) { u.name = NEW; u.email = 'john.simpson@dmp.az'; }
+            });
+            s.requests.forEach(r => {
+                r.requesterUser = ren(r.requesterUser);
+                (r.history || []).forEach(h => { h.actorUser = ren(h.actorUser); h.text = ren(h.text); h.comment = ren(h.comment); });
+            });
+            (s.notifications || []).forEach(n => { n.title = ren(n.title); n.body = ren(n.body); });
+            (s.materials || []).forEach(m => (m.changelog || []).forEach(c => { c.user = ren(c.user); }));
+            (s.bulkBatches || []).forEach(b => { b.user = ren(b.user); });
+            s.__requesterNameV = 1;
         }
         // Steward review removed (Aug 2026): create/amend chains no longer include the
         // Central team stage — only new-category requests go to the Central team

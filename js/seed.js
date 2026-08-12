@@ -173,7 +173,7 @@
 
     /* ---- Users (managed by Central team) ---- */
     const USERS = [
-        { id: 'u1', name: 'Arif Khalaf', email: 'arif.khalaf@dmp.az', role: 'Requester', plants: ['1700', '1004', '3000'], status: 'Active' },
+        { id: 'u1', name: 'John Simpson', email: 'john.simpson@dmp.az', role: 'Requester', plants: ['1700', '1004', '3000'], status: 'Active' },
         { id: 'u2', name: 'Leyla Mammadova', email: 'leyla.mammadova@dmp.az', role: 'Technical SME', plants: ['1700', '3000'], status: 'Active' },
         { id: 'u3', name: 'Rashad Aliyev', email: 'rashad.aliyev@dmp.az', role: 'Accounting', plants: ['3000'], status: 'Active' },
         { id: 'u4', name: 'Nigar Huseynova', email: 'nigar.huseynova@dmp.az', role: 'MDM Specialist', plants: ['1700', '3100', '3200'], status: 'Active' },
@@ -438,7 +438,7 @@
         return {
             session: {
                 currentRole: 'Requester',
-                currentUser: 'Arif Khalaf',
+                currentUser: 'John Simpson',
                 company: 'Delta Drilling LTD.',
                 plant: '1700'                      // requester's home plant
             },

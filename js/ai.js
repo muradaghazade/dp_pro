@@ -324,42 +324,54 @@
 
     const CAT_STOP = new Set(['high', 'low', 'heavy', 'duty', 'with', 'for', 'and', 'the', 'type', 'set', 'new', 'industrial', 'spare', 'part', 'parts']);
 
-    function catHash(str) {
-        let h = 7;
-        for (let i = 0; i < str.length; i++) h = ((h * 33) + str.charCodeAt(i)) >>> 0;
-        return h;
-    }
+    /* ---- real UNSPSC reference: genuine codes & titles for common MRO families.
+       The AI only ever proposes categories from this list — it never invents a
+       code or a label. First match wins, so specific entries come before broad
+       ones. Items matching nothing are left for the Central team to classify. ---- */
+    const UNSPSC_REF = [
+        { re: /ball\s*bearing/, code: '31171504', label: 'Ball bearings' },
+        { re: /roller\s*bearing|taper(ed)?\s*bearing|needle\s*bearing|\bbearing/, code: '31171500', label: 'Bearings' },
+        { re: /v-?\s?belt|wedge\s*belt|drive\s*belt|timing\s*belt|\bbelts?\b/, code: '26111800', label: 'Belts' },
+        { re: /gate\s*valve/, code: '40141607', label: 'Gate valves' },
+        { re: /\bvalve\b/, code: '40141600', label: 'Valves' },
+        { re: /hydraulic\s*hose|\bhose\b/, code: '40142200', label: 'Hoses' },
+        { re: /\bbolts?\b|anchor\s*bolt/, code: '31161600', label: 'Bolts' },
+        { re: /\bscrews?\b/, code: '31161500', label: 'Screws' },
+        { re: /\bnuts?\b/, code: '31161700', label: 'Nuts' },
+        { re: /\bwashers?\b/, code: '31161800', label: 'Washers' },
+        { re: /rivet|\bstud\b|fastener/, code: '31160000', label: 'Hardware' },
+        { re: /gasket/, code: '31181500', label: 'Gaskets' },
+        { re: /o-?ring|\bseal\b|sealing|packing/, code: '31181600', label: 'Seals' },
+        { re: /power\s*cable|control\s*cable|\bcable\b/, code: '26121600', label: 'Electrical cables and accessories' },
+        { re: /\bwire\b|conductor/, code: '26121500', label: 'Electrical wire' },
+        { re: /circuit\s*breaker|\bmcb\b|\bbreaker\b/, code: '39121601', label: 'Circuit breakers' },
+        { re: /\bfuse\b|relay|contactor|switchgear|\bswitch\b/, code: '39121600', label: 'Circuit protection devices and accessories' },
+        { re: /capacitor/, code: '32121500', label: 'Capacitors' },
+        { re: /filter|cartridge|strainer/, code: '40161500', label: 'Filters' },
+        { re: /\bpumps?\b/, code: '40151500', label: 'Pumps' },
+        { re: /electric\s*motor|\bmotor\b|gearbox/, code: '26101100', label: 'Electric motors' },
+        { re: /\bpipe\b|\btube\b/, code: '40171500', label: 'Commercial pipe and piping' },
+        { re: /fitting|flange|elbow|\btee\b|coupling|nipple/, code: '40170000', label: 'Pipe piping and pipe fittings' },
+        { re: /\boil\b|grease|lubricant/, code: '15121500', label: 'Lubricating preparations' },
+        { re: /wrench|spanner|screwdriver|plier|chisel|hammer|hand\s*tool|drill\s*bit/, code: '27110000', label: 'Hand tools' },
+        { re: /paint\b|primer|varnish/, code: '31211500', label: 'Paints and primers' },
+        { re: /adhesive|sealant|glue/, code: '31201600', label: 'Adhesives' },
+        { re: /solvent|degreaser|\bacid\b|inhibitor|chemical/, code: '12191500', label: 'Solvents' },
+        { re: /sensor|transmitter|transducer/, code: '41112100', label: 'Transducers' },
+        { re: /gauge|manometer|thermometer|flowmeter|indicator|\bmeter\b/, code: '41110000', label: 'Measuring and observing and testing instruments' },
+        { re: /welding\s*(electrode|rod|wire)|electrode/, code: '23271800', label: 'Welding and soldering and brazing supplies' },
+        { re: /\blamp\b|\bbulb\b|luminaire|floodlight|light\s*fitting/, code: '39101600', label: 'Lamps and lightbulbs' },
+        { re: /batter(y|ies)|accumulator/, code: '26111700', label: 'Batteries and cells and accessories' },
+        { re: /insulator|bushing|dielectric/, code: '39120000', label: 'Electrical equipment and components and supplies' }
+    ];
 
     function suggestCategory(rawText) {
-        const raw = (rawText || '').trim();
-        const t = raw.toLowerCase();
+        const t = (rawText || '').trim().toLowerCase();
+        // only REAL UNSPSC categories are ever proposed; when nothing fits, the AI
+        // proposes nothing and the item is classified manually by the Central team
+        const ref = UNSPSC_REF.find(r => r.re.test(t));
+        if (!ref) return null;
         const domain = CAT_DOMAINS.find(d => d.re instanceof RegExp ? d.re.test(t) : false) || null;
-
-        // derive the category name from the item nouns: strip part numbers, brands
-        // (ALL-CAPS tokens), measures and stop-words, keep the first three words
-        const words = raw
-            .replace(/\b[A-Z]{1,4}[- ]?\d{2,6}[A-Z0-9-]*\b/g, ' ')
-            .replace(/\d+([.,]\d+)?\s*(mm|cm|m|kg|g|l|ml|kv|v|a|w|kw|bar|psi|rpm|micron|mesh|°c)\b/gi, ' ')
-            .split(/\s+/)
-            .filter(w => /^[A-Za-z-]{3,}$/.test(w))
-            .filter(w => !(w.length >= 2 && w === w.toUpperCase()))          // brand-like tokens
-            .filter(w => !CAT_STOP.has(w.toLowerCase()));
-        // anchor the name on the domain-matched noun (e.g. "… hex bolt" → "Steel hex bolts")
-        let name = '';
-        if (domain) {
-            const idx = words.findIndex(w => domain.re.test(w.toLowerCase()));
-            if (idx !== -1) name = words.slice(Math.max(0, idx - 2), idx + 1).join(' ').toLowerCase();
-        }
-        if (!name) name = words.slice(0, 3).join(' ').toLowerCase();
-        if (name) {
-            name = name.charAt(0).toUpperCase() + name.slice(1);
-            if (!/s$/i.test(name)) name += 's';
-        } else {
-            name = domain ? domain.label : 'General materials';
-        }
-
-        const prefix = domain ? domain.prefix : '2410';
-        const unspsc = prefix + String(1000 + (catHash(name) % 9000));
 
         // attribute schema: domain attrs + description-driven signals + base set
         const attrs = [];
@@ -373,7 +385,7 @@
         addAttr(mkA('Standard / norm', 'Text'));
         addAttr(mkA('Weight', 'Number', 'KG'));
 
-        return { categoryName: name, unspsc, catAttributes: attrs.slice(0, 10) };
+        return { categoryName: ref.label, unspsc: ref.code, catAttributes: attrs.slice(0, 10) };
     }
 
     /* ---- living-catalog lookup: find a category previously added via a
@@ -558,27 +570,15 @@
             });
         }
 
+        // AI feedback covers ONLY the material group: the selected group must match
+        // the group mapped to the item's category in the catalog
         const warnings = [];
-        const hasMfr = payload.manufacturer && payload.manufacturer.trim() && payload.manufacturer.trim().toLowerCase() !== 'various';
-        const hasPart = payload.mfrPartNo && payload.mfrPartNo.trim();
-
-        if (payload.matTypeChoice === 'OEM' && (!hasMfr || !hasPart)) {
+        const cat = (window.UI && window.UI.categorySchema) ? window.UI.categorySchema(payload.unspsc) : null;
+        if (cat && cat.materialGroup && payload.materialGroup && payload.materialGroup !== cat.materialGroup) {
+            const desc = (window.UI && window.UI.groupDesc) ? window.UI.groupDesc(cat.materialGroup) : '';
             warnings.push({
                 level: 'warn',
-                msg: 'Material type is OEM — Manufacturer name and Manufacturer part number should be provided. Please fill them in.'
-            });
-        }
-        if (payload.matTypeChoice === 'Generic' && hasMfr && hasPart) {
-            warnings.push({
-                level: 'recommend',
-                msg: `This looks like an OEM part (Manufacturer “${payload.manufacturer}”, Part # “${payload.mfrPartNo}”). Consider changing Material type to OEM.`
-            });
-        }
-        if (payload.materialGroup && payload.storageLocation &&
-            payload.storageLocation !== ('M' + payload.materialGroup.slice(1, 4))) {
-            warnings.push({
-                level: 'recommend',
-                msg: `Storage location ${payload.storageLocation} does not align with Material Group ${payload.materialGroup}. Expected M${payload.materialGroup.slice(1, 4)}.`
+                msg: `Material Group ${payload.materialGroup} looks wrong for the category “${cat.label}” — the AI expects ${cat.materialGroup}${desc ? ' (' + desc + ')' : ''}.`
             });
         }
 

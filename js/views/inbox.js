@@ -4,7 +4,7 @@
 (function () {
     window.Views = window.Views || {};
     const esc = (s) => window.UI.esc(s);
-    const state = { tab: null, collapsed: false,
+    const state = { tab: null, mode: 'single', collapsed: false,
         filters: { plant: '', requester: '', types: [], stages: [], from: '', to: '' } };
 
     function filtersActive() {
@@ -113,12 +113,16 @@
                     const tc = TYPE_CHIP[r.type] || { label: r.type, cls: '' };
                     const s = window.Store.session();
                     const deletable = r.status === 'Draft' && r.requesterUser === s.currentUser && s.currentRole === 'Requester';
+                    const items = r.items || [];
+                    const declinedN = items.filter(it => it.status === 'Declined').length;
+                    const bulkSub = r.bulk ? `${items.length} item(s)${declinedN ? ' · ' + declinedN + ' declined' : ''}` : '';
                     return `<tr class="clickable" data-act="open" data-id="${r.id}">
                         <td class="it-no"># ${String(r.no || 0).padStart(4, '0')}</td>
-                        <td><span class="type-chip ${tc.cls}">${esc(tc.label)}</span></td>
+                        <td><span class="type-chip ${tc.cls}">${esc(tc.label)}</span>${r.bulk ? '<span class="type-chip tc-bulk">Bulk</span>' : ''}</td>
                         <td class="it-item">
                             <div class="it-title">${esc(p.shortName || r.title)}</div>
-                            ${r.sapId ? `<div class="it-sub">SAP ID ${esc(r.sapId)}</div>` : (p.mfrPartNo ? `<div class="it-sub">Part # ${esc(p.mfrPartNo)}</div>` : '')}
+                            ${r.bulk ? `<div class="it-sub">${esc(bulkSub)}</div>`
+                                : (r.sapId ? `<div class="it-sub">SAP ID ${esc(r.sapId)}</div>` : (p.mfrPartNo ? `<div class="it-sub">Part # ${esc(p.mfrPartNo)}</div>` : ''))}
                         </td>
                         <td>${esc(r.requesterUser)}</td>
                         <td><span class="it-plant" title="${esc(window.UI.plantName(r.requesterPlant))}">${esc(r.requesterPlant)} — ${esc(window.UI.plantName(r.requesterPlant))}</span></td>
@@ -243,13 +247,26 @@
                             ${esc(t.label)}<span class="tab-count ${t.key === state.tab ? 'active' : ''}">${t.rows.length}</span></div>`).join('')}
                     </div>
                     ${note}
-                    ${tableHtml(active.rows)}
+                    ${(() => {
+                        // single vs bulk requests are toggled via sub-tabs
+                        const bulkRows = active.rows.filter(r => r.bulk);
+                        const singleRows = active.rows.filter(r => !r.bulk);
+                        // when the chosen list is empty but the other has rows, follow the rows
+                        if (state.mode === 'bulk' && !bulkRows.length && singleRows.length) state.mode = 'single';
+                        else if (state.mode === 'single' && !singleRows.length && bulkRows.length) state.mode = 'bulk';
+                        const modeRows = state.mode === 'bulk' ? bulkRows : singleRows;
+                        return `<div class="mode-tabs">
+                            <div class="mode-tab ${state.mode === 'single' ? 'active' : ''}" data-act="mode" data-mode="single">Single requests <span class="mt-count">${singleRows.length}</span></div>
+                            <div class="mode-tab ${state.mode === 'bulk' ? 'active' : ''}" data-act="mode" data-mode="bulk">Bulk requests <span class="mt-count">${bulkRows.length}</span></div>
+                        </div>` + tableHtml(modeRows);
+                    })()}
                 </main>
             </div>`;
 
         window.UI.bindActions(root, {
             'home': () => window.UI.go('#/master'),
             'tab': (t) => { state.tab = t.getAttribute('data-tab'); window.Views.inbox(); },
+            'mode': (t) => { state.mode = t.getAttribute('data-mode'); window.Views.inbox(); },
             'open': (t) => window.UI.go('#/request/' + t.getAttribute('data-id')),
             'del-draft': (t, e) => {
                 e.stopPropagation();
