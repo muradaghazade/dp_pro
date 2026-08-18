@@ -86,6 +86,44 @@
             `<div class="def-row"><div class="def-k">${esc(r[0])}</div><div class="def-v">${esc((r[1] === undefined || r[1] === null || r[1] === '') ? '—' : r[1])}</div></div>`).join('')}</div>`;
     }
 
+    /* ---- inventory rule: MRP type ND + lot-size EX → Min/Max levels are not
+       applicable; grey them out, disable and clear them (live on change) ---- */
+    function invMinMaxOff(container) {
+        const g = (n) => container.querySelector(`[name="inv::${n}"]`);
+        const mt = g('mrpType'), ls = g('lotSize');
+        return !!(mt && ls && mt.value === 'ND' && ls.value === 'EX');
+    }
+    function bindInvMinMaxRule(container) {
+        const apply = () => {
+            const off = invMinMaxOff(container);
+            ['mrpControllerMin', 'mrpControllerMax'].forEach(n => {
+                const el = container.querySelector(`[name="inv::${n}"]`);
+                if (!el) return;
+                el.disabled = off;
+                if (off) { el.value = ''; el.classList.remove('error'); }
+                const field = el.closest('.field');
+                if (field) {
+                    field.classList.toggle('field-disabled', off);
+                    // the mandatory mark goes away while the field is not applicable
+                    const lab = field.querySelector('label');
+                    if (lab) {
+                        lab.classList.toggle('req-label', !off);
+                        const star = lab.querySelector('.req');
+                        if (star) star.style.display = off ? 'none' : '';
+                    }
+                    const hint = field.querySelector('.hint');
+                    if (hint) hint.textContent = off ? 'Not applicable — MRP type ND with lot-size EX' : 'Numeric';
+                    const err = field.querySelector('.field-error');
+                    if (err && off) err.textContent = '';
+                }
+            });
+        };
+        container.addEventListener('change', (e) => {
+            if (e.target.name === 'inv::mrpType' || e.target.name === 'inv::lotSize') apply();
+        });
+        apply();
+    }
+
     /* ---------- toast ---------- */
     function toast(opts) {
         if (typeof opts === 'string') opts = { body: opts };
@@ -277,7 +315,8 @@
             grid: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>`,
             factory: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 20a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8l-7 5V8l-7 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/></svg>`,
             upload: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`,
-            users: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`
+            users: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+            chart: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>`
         };
         const link = (hash, icon, label) => `<div class="drawer-link" data-go="${hash}">${icon}<span>${esc(label)}</span></div>`;
         root.innerHTML = `
@@ -293,6 +332,7 @@
                 ${link('#/bulk', ic.upload, 'Bulk upload')}
                 ${isCentral ? `
                     <div class="drawer-section">Administration <span class="drawer-role-chip">Central team</span></div>
+                    ${link('#/dashboard', ic.chart, 'Analytics dashboard')}
                     ${link('#/categories', ic.grid, 'Category catalog')}
                     ${link('#/manufacturers', ic.factory, 'Manufacturers')}
                     ${link('#/users', ic.users, 'User management')}
@@ -585,7 +625,7 @@
             </div>
             <div class="rb-title" style="margin-bottom:8px">Attributes</div>
             <div class="cat-attr-wrap"><table class="data-table attr-edit-table">
-                <thead><tr><th>Attribute name</th><th>Field type</th><th>UoM</th><th>Mandatory</th><th>List values</th><th></th></tr></thead>
+                <thead><tr><th>Attribute name</th><th>Field type</th><th>Measured in</th><th>Mandatory</th><th>List values</th><th></th></tr></thead>
                 <tbody class="cat-attr-rows">${attrs.map(catAttrRowHtml).join('')}</tbody>
             </table></div>
             <button type="button" class="btn btn-outline btn-sm" data-cat="add-row" style="margin-top:10px">+ Add attribute</button>
@@ -643,6 +683,6 @@
         field, techGrid, workflowTracker, historyList,
         categoryEditorHtml, bindCategoryEditor, collectCategoryEditor, validateCategoryEditor, searchSelectHtml,
         plantName, plantLabel, groupDesc, valuationDesc, categorySchema, abcDesc, storageOptionsFor, inventoryRows, ds,
-        docListHtml, docKB
+        docListHtml, docKB, bindInvMinMaxRule
     };
 })();

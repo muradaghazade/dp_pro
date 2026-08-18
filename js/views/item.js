@@ -241,6 +241,7 @@
                     ${F({ label: 'Planned Delivery Time (Days)', name: 'inv::plannedDeliveryDays', value: inv.plannedDeliveryDays, hint: 'Number of days' })}
                     ${F({ label: 'Safety Stock', name: 'inv::safetyStock', value: inv.safetyStock, hint: 'Required for Z1+R' })}
                 </div></form>`,
+            onOpen: (o) => window.UI.bindInvMinMaxRule(o.querySelector('#inv-form')),
             buttons: [
                 { label: 'Cancel', cls: 'btn-outline', onClick: (o) => o.remove() },
                 { label: 'Save inventory data', cls: 'btn-green', onClick: (o) => {
@@ -274,8 +275,11 @@
         const need = (k, label) => { if (!inv[k] || String(inv[k]).trim() === '') errors.push({ field: k, msg: (label || k) + ' is required.' }); };
         need('abcCode', 'ABC Code');
         need('mrpType', 'MRP Type');
-        need('mrpControllerMin', 'MRP Controller — Min qty');
-        need('mrpControllerMax', 'MRP Controller — Max qty');
+        // ND + EX → Min/Max levels are not applicable (disabled in the form)
+        if (!(inv.mrpType === 'ND' && inv.lotSize === 'EX')) {
+            need('mrpControllerMin', 'MRP Controller — Min qty');
+            need('mrpControllerMax', 'MRP Controller — Max qty');
+        }
         need('lotSize', 'Lot-size');
         const z1r = inv.mrpType === 'Z1' && inv.abcCode === 'R';
         const vbn = inv.mrpType === 'VB' && inv.abcCode === 'N';

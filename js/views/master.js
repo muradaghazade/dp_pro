@@ -41,6 +41,7 @@
                     <div class="mc-pills">${opts.pills}</div>
                 </div>
                 <div class="material-desc-line">${esc(opts.desc || '')}</div>
+                ${opts.hitsHtml || ''}
                 <div class="mc-meta-grid">
                     ${opts.meta.map(x => `<div class="mc-meta"><span class="k">${esc(x.k)}</span><span class="v">${esc(x.v || '—')}</span></div>`).join('')}
                 </div>
@@ -55,7 +56,7 @@
         </div>`;
     }
 
-    function cardHtml(m) {
+    function cardHtml(m, attrHits) {
         const status = m.itemStatus || 'Approved';
         const statusCls = { 'Approved': 'approved', 'In review': 'in-review', 'Draft': 'draft' }[status] || 'approved';
         const pills = `<span class="status-pill ${statusCls}">${esc(status)}</span>` +
@@ -68,10 +69,15 @@
         meta.push({ k: 'SAP ID', v: m.sapId });
         meta.push({ k: 'Material group', v: m.materialGroup });
         meta.push({ k: 'Base UoM', v: m.baseUom });
+        // highlighted "matching attribute" chips for attribute-value search results
+        const hitsHtml = (attrHits && attrHits.length)
+            ? `<div class="mc-attr-hits">Matching attribute${attrHits.length === 1 ? '' : 's'}:
+                ${attrHits.map(h => `<span class="attr-hit"><span class="ah-k">${esc(h.name)}</span><mark>${esc(h.value)}</mark></span>`).join('')}</div>`
+            : '';
         return cardShell({
             act: 'open-item', id: m.id, image: m.image,
             title: m.shortName || m.name, desc: m.longDesc, pills,
-            meta,
+            meta, hitsHtml,
             plants: m.plants || [],
             footNote: 'dmp ID ' + (m.dmpId || '—'),
             cardCls: m.blockStatus ? 'card-blocked' : ''
@@ -126,7 +132,8 @@
             </div>
             <div class="ai-ident">
                 <div class="ai-ident-k">Identified item</div>
-                <div class="ai-ident-v">${esc(p.summary)}</div>
+                <div class="ai-ident-v">${esc(a.suggestion ? a.suggestion.charAt(0).toUpperCase() + a.suggestion.slice(1) : p.summary)}</div>
+                ${a.suggestion ? `<div class="muted" style="font-size:11.5px;margin-top:3px">✓ Spelling corrected — you typed “${esc(a.raw)}”.</div>` : ''}
             </div>
             <div class="ai-chips">${chips}</div>
             ${grid}
@@ -135,6 +142,30 @@
 
     function outcomeHtml(a) {
         const myPlant = window.Store.session().plant;
+        if (a.outcome === 'too_generic') {
+            // the query can't pinpoint one item — say so, then show what it matches
+            const sug = a.suggestion
+                ? `<br>Maybe you meant <button class="btn-link" data-act="search-suggest" data-q="${esc(a.suggestion)}"><strong>“${esc(a.suggestion.charAt(0).toUpperCase() + a.suggestion.slice(1))}”</strong></button>? Results below are for that spelling.`
+                : '';
+            return `<div class="banner warn">
+                    <span class="banner-icon">🔎</span>
+                    <div class="banner-body"><div class="banner-title">Description too general to identify an exact item</div>
+                        “${esc(a.raw)}” is not enough to identify one specific item — add a manufacturer, part number or key specifications for an exact match. Meanwhile, here are the items from the material master matching your search:${sug}</div>
+                </div>
+                <div class="rb-title" style="margin:6px 0 12px">${a.similar.length} matching item(s)</div>
+                <div class="items-list-container">${a.similar.map(m => cardHtml(m)).join('')}</div>`;
+        }
+        if (a.outcome === 'attr_match') {
+            // the query is an attribute VALUE — list the items carrying it,
+            // with the matching attribute highlighted on each card
+            return `<div class="banner warn">
+                    <span class="banner-icon">🔎</span>
+                    <div class="banner-body"><div class="banner-title">“${esc(a.raw)}” looks like an attribute value — not enough to identify an item</div>
+                        A value alone cannot identify one specific item. Here are the items from the material master that carry <strong>${esc(a.raw)}</strong> in one of their attributes — the matching attribute is highlighted on each card:</div>
+                </div>
+                <div class="rb-title" style="margin:6px 0 12px">${a.similar.length} item(s) with this attribute value</div>
+                <div class="items-list-container">${a.similar.map(m => cardHtml(m, (a.attrHits || {})[m.id])).join('')}</div>`;
+        }
         if (a.outcome === 'category_missing') {
             const cs = a.categorySuggestion;
             return `<div class="banner warn">
@@ -453,7 +484,7 @@
             </div>
             <div class="rb-title" style="margin-bottom:8px">Attributes</div>
             <div class="cat-attr-wrap"><table class="data-table">
-                <thead><tr><th>Attribute name</th><th>Field type</th><th>UoM</th><th>Mandatory</th><th>List values</th></tr></thead>
+                <thead><tr><th>Attribute name</th><th>Field type</th><th>Measured in</th><th>Mandatory</th><th>List values</th></tr></thead>
                 <tbody>${rows || '<tr><td colspan="5" class="muted">No attributes</td></tr>'}</tbody>
             </table></div>`;
     }
@@ -535,6 +566,12 @@
         window.UI.bindActions(root, {
             'search': runSearch,
             'clear': () => { S.query = ''; S.analysis = null; S.error = null; render(); },
+            'search-suggest': (t) => {
+                const q = t.getAttribute('data-q');
+                const inp = document.getElementById('master-search');
+                if (inp) inp.value = q;
+                window.Views.masterSearch(q);
+            },
             'layout': (t) => { S.layout = t.getAttribute('data-layout'); render(); },
             'toggle-sidebar': () => { S.sidebarCollapsed = !S.sidebarCollapsed; root.querySelector('.sidebar').classList.toggle('collapsed', S.sidebarCollapsed); },
             'open-item': (t) => window.UI.go('#/item/' + t.getAttribute('data-id')),

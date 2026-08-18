@@ -53,7 +53,7 @@
                 (p.sourceText ? defRow('Searched item', p.sourceText, true) : ''))}
             <div class="panel-card"><div class="pc-title">Proposed attributes</div>
                 ${attrs.length ? `<table class="data-table attr-table">
-                    <thead><tr><th>Attribute name</th><th>Field type</th><th>UoM</th><th>Mandatory</th><th>List values</th></tr></thead>
+                    <thead><tr><th>Attribute name</th><th>Field type</th><th>Measured in</th><th>Mandatory</th><th>List values</th></tr></thead>
                     <tbody>${attrs.map(a => `<tr>
                         <td style="font-weight:600">${esc(a.name)}</td><td>${esc(a.fieldType || 'Text')}</td>
                         <td>${esc(a.uom || '—')}</td><td>${a.mandatory ? 'Yes' : 'No'}</td><td>${esc(a.options || '—')}</td>
@@ -113,6 +113,8 @@
                     <button class="btn btn-green" data-act="submit-inv">Submit inventory data</button>
                 </div>
             </div>`;
+
+        window.UI.bindInvMinMaxRule(zone.querySelector('#inv-form'));
 
         window.UI.bindActions(zone, {
             'submit-inv': () => {
@@ -348,8 +350,11 @@
         const req = (k, label) => { if (!inv[k] || String(inv[k]).trim() === '') errors.push({ field: k, msg: (label || k) + ' is required.' }); };
         req('abcCode', 'ABC Code');
         req('mrpType', 'MRP Type');
-        req('mrpControllerMin', 'MRP Controller — Min qty');
-        req('mrpControllerMax', 'MRP Controller — Max qty');
+        // ND + EX → Min/Max levels are not applicable (disabled in the form)
+        if (!(inv.mrpType === 'ND' && inv.lotSize === 'EX')) {
+            req('mrpControllerMin', 'MRP Controller — Min qty');
+            req('mrpControllerMax', 'MRP Controller — Max qty');
+        }
         req('lotSize', 'Lot-size');
         const z1r = inv.mrpType === 'Z1' && inv.abcCode === 'R';
         const vbn = inv.mrpType === 'VB' && inv.abcCode === 'N';

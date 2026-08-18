@@ -327,6 +327,7 @@
         'Attribute name': 'Atribut adı',
         'Field type': 'Sahə tipi',
         'UoM': 'ÖV',
+        'Measured in': 'Ölçü vahidi',
         'Mandatory': 'Məcburi',
         'Optional': 'İstəyə bağlı',
         'Edit category': 'Kateqoriyanı redaktə et',

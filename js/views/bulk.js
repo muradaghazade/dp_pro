@@ -7,21 +7,35 @@
     window.Views = window.Views || {};
     const esc = (s) => window.UI.esc(s);
 
-    // Demo: every uploaded file is treated as our template containing these 10 descriptions.
+    // Demo: every uploaded file is treated as our template containing these 20 descriptions.
     // `force` pins an outcome where the demo needs a specific narrative.
     const DEMO_ROWS = [
-        { desc: 'Wedge V-belt SKF PHG SPC2500, Section SPC, pitch length 2500 mm, top width 22 mm' },
-        { desc: 'Cast steel gate valve DN150 PN16, flanged, handwheel operated, GV-150-PN16' },
-        { desc: 'NSK ball bearing 6203-2RS, single row deep groove, 17 x 40 x 12 mm, C3 clearance' },
-        { desc: 'Parker hydraulic hose DN12, two-wire braid, 250 bar working pressure, EN 853' },
-        { desc: 'WAGO 222 series splicing connector 222-412, 2-conductor, lever actuation',
-          force: { outcome: 'exists_other_plant', matchId: 'mat_s10_404804' } },
-        { desc: 'ESAB welding electrode OK 76.96, 2.5 mm, E8015-B8, DC+' },
-        { desc: 'SKF deep groove ball bearing 6307-2RS1, single row, rubber seals both sides',
-          force: { outcome: 'exists_my_plant', matchId: 'mat_s10_486993' } },
+        // ---- not in the master yet → create ----
+        { desc: 'SKF deep groove ball bearing 6301-2RS, single row, 12 x 37 x 12 mm, C3 clearance' },
+        { desc: 'Cast steel gate valve DN80 PN25, flanged, gear operated, GV-80-PN25' },
+        { desc: 'Parker hydraulic hose DN16, two-wire braid, 350 bar working pressure, EN 856' },
+        { desc: 'NSK ball bearing 6210-ZZ, single row, metal shields, 50 x 90 x 20 mm' },
+        { desc: 'ESAB welding electrode OK 48.00, 3.2 mm, E7018, AC/DC' },
+        { desc: 'SHTURMANN CAT6 patch cord, 3 m, UTP, RJ45 connectors' },
+        { desc: 'Stainless steel ball valve DN25 PN40, threaded ends, lever operated' },
+        { desc: 'FAG tapered roller bearing 32008, 40 x 68 x 19 mm' },
+        // ---- already mastered in the requester's plant ----
         { desc: 'SKF ball bearing 6205-2RS, 25 x 52 x 15 mm, C3 clearance' },
         { desc: 'Manuli hydraulic hose DN20, one-wire braid, abrasion-resistant cover' },
-        { desc: 'Titanium flux capacitor module XQ-99, 1.21 GW, Doc Brown Industries' }
+        { desc: 'ESAB welding electrode OK 76.96, 2.5 mm, E8015-B8, DC+' },
+        { desc: 'Cast steel gate valve DN150 PN16, flanged, handwheel operated, GV-150-PN16' },
+        // ---- mastered in another plant → extend ----
+        { desc: 'ABB miniature circuit breaker S202-C6, 6 A, C-curve, 2-pole',
+          force: { outcome: 'exists_other_plant', matchId: 'mat_s10_569535' } },
+        { desc: 'Siemens motor protection circuit breaker 3RV1011-1BA10, 1.4–2 A',
+          force: { outcome: 'exists_other_plant', matchId: 'mat_s10_329146' } },
+        // ---- no category in the system yet → category request ----
+        { desc: 'Hex bolt M16 x 60 mm, grade 8.8, zinc plated' },
+        { desc: 'LED lamp E27, 15 W, warm white, 1500 lumen' },
+        { desc: 'Acetone solvent, technical grade, 5 litre drum' },
+        { desc: 'Electrolytic capacitor 470 uF, 63 V, radial' },
+        { desc: 'O-ring NBR, 50 x 3 mm, oil resistant' },
+        { desc: 'Anti-corrosion primer paint, grey, 5 litre' }
     ];
 
     const OUTCOME_META = {
@@ -39,6 +53,8 @@
         return s.bulkBatches;
     }
     function batchById(id) { return batches().find(b => b.id === id); }
+    // used by the Central team dashboard to measure AI duplicate matching
+    window.Views._bulkProcessRow = function (row, i) { return processRow(row, i); };
 
     /* ---- start a new bulk session ---- */
     window.Views.startBulk = function (fileName) {
@@ -312,11 +328,47 @@
     function submitBulkAction(batch, outcome) {
         const rows = batch.rows.map((r, i) => processRow(r, i)).filter(x => x.outcome === outcome && !x.row.actionTaken);
         if (!rows.length) return;
+        // bulk creates first ask which record type the batch should be created as
+        if (outcome === 'not_found') return askRecordType(batch, rows);
+        doSubmitBulkAction(batch, rows, outcome);
+    }
+
+    // golden = full record (technical attributes mandatory further down the chain);
+    // sourcing = quick incomplete record — attributes optional, enriched later
+    function askRecordType(batch, rows) {
+        window.UI.openModal({
+            title: 'Create ' + rows.length + ' new item' + (rows.length === 1 ? '' : 's'),
+            bodyHtml: `
+                <div class="muted" style="margin-bottom:14px;font-size:13.5px">Choose how this batch should be created:</div>
+                <label class="checkbox-label" style="align-items:flex-start;margin-bottom:12px">
+                    <input type="radio" name="blk-rectype" value="Golden record" checked style="margin-top:3px">
+                    <span><strong>Golden record</strong> — complete master record.<br>
+                        <span class="muted" style="font-size:12.5px">Technical attributes are mandatory and reviewed in full.</span></span>
+                </label>
+                <label class="checkbox-label" style="align-items:flex-start">
+                    <input type="radio" name="blk-rectype" value="Sourcing record" style="margin-top:3px">
+                    <span><strong>Sourcing record</strong> — quick incomplete record.<br>
+                        <span class="muted" style="font-size:12.5px">Technical attributes are optional; the record is enriched later.</span></span>
+                </label>`,
+            buttons: [
+                { label: 'Cancel', cls: 'btn-outline', onClick: (o) => o.remove() },
+                { label: 'Submit bulk request', cls: 'btn-green', onClick: (o) => {
+                    const rt = (o.querySelector('[name="blk-rectype"]:checked') || {}).value || 'Golden record';
+                    o.remove();
+                    doSubmitBulkAction(batch, rows, 'not_found', rt);
+                } }
+            ]
+        });
+    }
+
+    function doSubmitBulkAction(batch, rows, outcome, recordType) {
         const type = { not_found: 'create', exists_other_plant: 'extend', category_missing: 'category' }[outcome];
         const items = [];
         rows.forEach(x => {
             if (type === 'create') {
-                items.push({ desc: x.row.desc, payload: window.AI.toPayload(x.a) });
+                const payload = window.AI.toPayload(x.a);
+                payload.recordType = recordType || 'Golden record';
+                items.push({ desc: x.row.desc, payload });
             } else if (type === 'extend') {
                 if (!x.match) return;
                 items.push({ desc: x.row.desc, materialId: x.match.id,
@@ -330,6 +382,12 @@
         });
         if (!items.length) return;
         const req = window.Workflow.createBulkRequest({ type, items });
+        if (recordType === 'Sourcing record') {
+            window.Store.set(s => {
+                const r = s.requests.find(x => x.id === req.id);
+                if (r) r.title = 'Bulk new sourcing items — ' + items.length + ' items';
+            });
+        }
         window.Store.set(s => {
             const b = (s.bulkBatches || []).find(z => z.id === batch.id);
             if (b) rows.forEach(x => { if (b.rows[x.i]) b.rows[x.i].actionTaken = 'Submitted in bulk — ' + window.Workflow.reqNo(req); });
