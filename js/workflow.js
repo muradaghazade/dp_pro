@@ -482,10 +482,10 @@
     }
 
     const MAT_FIELD_LABELS = {
-        shortName: 'Short name', longDesc: 'Long description', matTypeChoice: 'Material type',
+        shortName: 'Short name', longDesc: 'Long description', matTypeChoice: 'Part type',
         manufacturer: 'Manufacturer', mfrPartNo: 'Manufacturer part #', unspsc: 'UNSPSC code',
         unspscLabel: 'Category', materialGroup: 'Material Group', baseUom: 'Base UoM',
-        poUnit: 'PO unit',
+        poUnit: 'PO unit', poUnitFactor: 'PO unit conversion',
         storageLocation: 'Storage location', mrpEnabled: 'MRP planning enabled',
         batchManaged: 'Batch-managed', mrpType: 'MRP type', recordType: 'Record type',
         valuationClass: 'Valuation class'
@@ -522,8 +522,8 @@
 
     const INV_FIELD_LABELS = {
         material: 'Material (MMR)', plant: 'Plant', mrpGroup: 'MRP Group', abcCode: 'ABC Code',
-        mrpType: 'MRP Type', reorderPoint: 'Reorder point', mrpControllerMin: 'MRP Controller (Min qty)',
-        mrpControllerMax: 'MRP Controller (Max qty)', lotSize: 'Lot-size', fixedLotSize: 'Fixed lot size',
+        mrpType: 'MRP Type', reorderPoint: 'Reorder point', mrpControllerMin: 'Min qty',
+        mrpControllerMax: 'Max qty', lotSize: 'Lot-size', fixedLotSize: 'Fixed lot size',
         procurementType: 'Procurement Type', plannedDeliveryDays: 'Planned Delivery Time (Days)', safetyStock: 'Safety Stock'
     };
     function diffInventory(before, after) {
@@ -616,7 +616,7 @@
             manufacturer: p.manufacturer, mfrPartNo: p.mfrPartNo,
             unspsc: p.unspsc, unspscLabel: p.unspscLabel, category: p.category,
             materialGroup: p.materialGroup,
-            baseUom: p.baseUom, poUnit: p.poUnit, storageLocation: p.storageLocation,
+            baseUom: p.baseUom, poUnit: p.poUnit, poUnitFactor: p.poUnitFactor, storageLocation: p.storageLocation,
             mrpEnabled: p.mrpEnabled, batchManaged: p.batchManaged, mrpType: p.mrpType,
             valuationClass: p.valuationClass, recordType: p.recordType,
             attributes: p.attributes || {},

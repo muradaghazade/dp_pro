@@ -941,7 +941,7 @@
         { k: 'mrpEnabled', label: 'MRP planning enabled' },
         { k: 'batchManaged', label: 'Batch-managed' },
         { k: 'mrpType', label: 'MRP type' },
-        { k: 'matTypeChoice', label: 'Material type (OEM/Generic/…)' },
+        { k: 'matTypeChoice', label: 'Part type (OEM/Generic/…)' },
         { k: 'recordType', label: 'Golden/Sourcing record' }
     ];
 

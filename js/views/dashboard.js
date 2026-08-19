@@ -691,6 +691,7 @@
                         <div class="muted" style="font-size:14px;margin-top:3px">How request work is flowing — volumes, decisions and where it slows down. Central team view.</div>
                         ${filtersActive() ? `<div class="muted" style="font-size:13px;margin-top:6px">Filtered — ${d.reqs.length} of ${d.allReqs.length} requests match. <button class="btn-link" data-act="clear-dash-filters">Clear filters</button></div>` : ''}
                     </div>
+                    <button class="btn btn-outline btn-sm" data-act="items-report">📋 Created items report ›</button>
                 </div>
                 <div class="dash-filters">
                     <span class="bab-label">Period</span>
@@ -845,6 +846,7 @@
             'home': () => window.UI.go('#/master'),
             'range': (t) => { S.rangeDays = Number(t.getAttribute('data-v')); S.f.frame = ''; window.Views.dashboard(); },
             'open-req': (t) => window.UI.go('#/request/' + t.getAttribute('data-id')),
+            'items-report': () => window.UI.go('#/items-report'),
             'clear-dash-filters': () => { S.f = EMPTY_FILTERS(); window.Views.dashboard(); },
             'toggle-sidebar': () => { S.collapsed = !S.collapsed; root.querySelector('.sidebar').classList.toggle('collapsed', S.collapsed); }
         });

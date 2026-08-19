@@ -468,6 +468,14 @@ a { color: inherit; }
     background: #FFFBEA; border-radius: 6px; padding: 3px 8px; }
 .attr-hit .ah-k { font-weight: 600; color: #7a6a1f; }
 .attr-hit mark { background: #FFE783; border-radius: 3px; padding: 0 4px; font-weight: 700; color: #3d3506; }
+.ir-thumb { width: 38px; height: 38px; flex: 0 0 38px; border: 1px solid var(--border-soft); border-radius: 7px;
+    display: flex; align-items: center; justify-content: center; overflow: hidden; background: #fff; }
+.ir-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.ir-table td { vertical-align: top; padding-top: 12px; padding-bottom: 12px; }
+.date-range { display: flex; flex-direction: column; gap: 6px; }
+.dr-row { display: flex; align-items: center; gap: 8px; }
+.dr-lbl { font-size: 11.5px; color: var(--text-muted); width: 32px; flex: 0 0 32px; }
+.dr-row .form-input { font-size: 12.5px; padding: 0 8px; height: 34px; }
 .viz-row { cursor: default; }
 .viz-row:hover path { opacity: .85; }
 .viz-row .viz-wash { transition: opacity .12s; }

@@ -58,7 +58,7 @@
             { k: 'Category · UNSPSC', v: (m.unspscLabel || m.category) ? (m.unspscLabel || m.category) + (m.unspsc ? ' · ' + m.unspsc : '') : '' },
             { k: 'Material group', v: m.materialGroup ? m.materialGroup + ' — ' + window.UI.groupDesc(m.materialGroup) : '' },
             { k: 'Base UoM', v: m.baseUom },
-            { k: 'PO unit', v: m.poUnit },
+            { k: 'PO unit', v: m.poUnit && m.poUnitFactor ? `${m.poUnit} — 1 ${m.poUnit} = ${m.poUnitFactor} ${m.baseUom || ''}` : m.poUnit },
             { k: 'Storage location', v: m.storageLocation }
         ];
 
@@ -96,7 +96,7 @@
                     <div class="def-grid">
                         ${defRow('Manufacturer', m.manufacturer)}
                         ${defRow('Manufacturer part #', m.mfrPartNo)}
-                        ${defRow('Material type', m.matTypeChoice)}
+                        ${defRow('Part type', m.matTypeChoice)}
                         ${defRow('Material Type (SAP)', m.materialType || 'ROH')}
                         ${defRow('MRP planning', mrp)}
                         ${defRow('Batch-managed', m.batchManaged)}
@@ -233,8 +233,8 @@
                     ${F({ label: 'ABC Code', name: 'inv::abcCode', type: 'select', value: inv.abcCode, options: ds.ABC_CODES, required: true })}
                     ${F({ label: 'MRP Type', name: 'inv::mrpType', type: 'select', value: inv.mrpType || m.mrpType, options: ds.MRP_TYPES, required: true, hint: 'Auto from item, changeable' })}
                     ${F({ label: 'Reorder point', name: 'inv::reorderPoint', value: inv.reorderPoint, hint: 'Required for Z1+R, VB+N, VB+G' })}
-                    ${F({ label: 'MRP Controller — Min qty', name: 'inv::mrpControllerMin', value: inv.mrpControllerMin, required: true, hint: 'Numeric' })}
-                    ${F({ label: 'MRP Controller — Max qty', name: 'inv::mrpControllerMax', value: inv.mrpControllerMax, required: true, hint: 'Numeric' })}
+                    ${F({ label: 'Min qty', name: 'inv::mrpControllerMin', value: inv.mrpControllerMin, required: true, hint: 'Numeric' })}
+                    ${F({ label: 'Max qty', name: 'inv::mrpControllerMax', value: inv.mrpControllerMax, required: true, hint: 'Numeric' })}
                     ${F({ label: 'Lot-size', name: 'inv::lotSize', type: 'select', value: inv.lotSize, options: ds.LOT_SIZES, required: true })}
                     ${F({ label: 'Fixed lot size', name: 'inv::fixedLotSize', value: inv.fixedLotSize, hint: 'Required for Z1+R' })}
                     ${F({ label: 'Procurement Type', name: 'inv::procurementType', value: 'F', readonly: true, hint: 'Fixed' })}
@@ -277,8 +277,8 @@
         need('mrpType', 'MRP Type');
         // ND + EX → Min/Max levels are not applicable (disabled in the form)
         if (!(inv.mrpType === 'ND' && inv.lotSize === 'EX')) {
-            need('mrpControllerMin', 'MRP Controller — Min qty');
-            need('mrpControllerMax', 'MRP Controller — Max qty');
+            need('mrpControllerMin', 'Min qty');
+            need('mrpControllerMax', 'Max qty');
         }
         need('lotSize', 'Lot-size');
         const z1r = inv.mrpType === 'Z1' && inv.abcCode === 'R';

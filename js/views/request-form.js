@@ -143,14 +143,14 @@
                         ${F({ label: 'Material Type', name: 'materialType', value: 'ROH', readonly: true, hint: 'Fixed for Demand Planning' })}
                         ${F({ label: 'Material Description', name: 'materialDescription', value: payload.materialDescription, readonly: true, hint: 'Populated from Material Group' })}
                         ${F({ label: 'Material Group', name: 'materialGroup', value: payload.materialGroup, readonly: true, required: true, hint: 'Selected automatically from the category' })}
-                        ${F({ label: 'Material type', name: 'matTypeChoice', type: 'select', value: payload.matTypeChoice, options: ds().MATERIAL_TYPE_CHOICES, required: true, hint: 'OEM / Generic / Engineered / Commercial' })}
+                        ${F({ label: 'Part type', name: 'matTypeChoice', type: 'select', value: payload.matTypeChoice, options: ds().MATERIAL_TYPE_CHOICES, required: true, hint: 'OEM / Generic / Engineered / Commercial' })}
                         ${F({ label: 'Manufacturer name', name: 'manufacturer', value: payload.manufacturer, hint: 'Mandatory for OEM' })}
                         ${F({ label: 'Manufacturer part #', name: 'mfrPartNo', value: payload.mfrPartNo, hint: 'Mandatory for OEM' })}
 
                         <div class="rf-section"><span class="rf-step">3</span><span class="t">Logistics & planning</span><span class="rule"></span></div>
                         ${F({ label: 'Base unit of measure', name: 'baseUom', type: 'select', value: payload.baseUom, options: ds().UOM, required: true })}
                         <div id="storage-field" style="display:contents">${storageFieldHtml((payload.plants && payload.plants.length ? payload.plants[0] : payload.plant) || '', payload.storageLocation)}</div>
-                        ${F({ label: 'MRP type', name: 'mrpType', type: 'select', value: payload.mrpType, options: ds().MRP_TYPES, required: true, hint: 'PD (planned) / ND (no planning)' })}
+                        ${F({ label: 'MRP type', name: 'mrpType', type: 'select', value: payload.mrpType, options: ds().MRP_TYPES, required: true })}
                         ${F({ label: 'MRP planning enabled?', name: 'mrpEnabled', type: 'radio', value: payload.mrpEnabled, options: ['Yes', 'No'], required: true })}
                         ${F({ label: 'Batch-managed?', name: 'batchManaged', type: 'radio', value: payload.batchManaged, options: ['Yes', 'No'], required: true })}
                         ${F({ label: 'Record type', name: 'recordType', type: 'radio', value: payload.recordType, options: ['Golden record', 'Sourcing record'], required: true })}
@@ -255,10 +255,11 @@
         }));
 
         /* ---- AI suggestions: shown as per-field chips the user must accept ---- */
+        // MRP type / MRP enabled / Batch-managed / Record type are business
+        // decisions the requester makes — the AI never suggests them
         const SUGGEST_FIELDS = [
             { name: 'unspsc', label: 'Category' }, { name: 'matTypeChoice' }, { name: 'manufacturer' },
-            { name: 'mfrPartNo' }, { name: 'baseUom' }, { name: 'storageLocation' }, { name: 'mrpType' },
-            { name: 'mrpEnabled', radio: true }, { name: 'batchManaged', radio: true }, { name: 'recordType', radio: true }
+            { name: 'mfrPartNo' }, { name: 'baseUom' }, { name: 'storageLocation' }
         ];
         function fieldCurrent(f) {
             if (f.radio) { const r = root.querySelector(`input[name="${f.name}"]:checked`); return r ? r.value : ''; }
