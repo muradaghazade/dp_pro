@@ -20,11 +20,15 @@
     const S = { tab: 'all', q: '' };
 
     /* ---- demo integration events: failures, retries and inbound merges.
-       Generated once against real master items, then persisted. ---- */
+       Generated once against real master items, then persisted.
+       Data consistency (UoM, descriptions, valuation…) is validated in dmp
+       BEFORE the call — so realistic SAP failures are connection and
+       SAP-side runtime issues, never bad data. ---- */
     function ensureDemoLog() {
-        if (Array.isArray(window.Store.get().sapLog)) return;
+        const st = window.Store.get();
+        if (Array.isArray(st.sapLog) && st.__sapLogV2) return;
         const mats = window.Store.materials();
-        if (!mats.length) { window.Store.set(s => { s.sapLog = []; }); return; }
+        if (!mats.length) { window.Store.set(s => { s.sapLog = []; s.__sapLogV2 = true; }); return; }
         const pick = (i) => mats[i % mats.length];
         const D = 86400e3, now = Date.now();
         const mk = (daysAgo, dir, m, op, status, message, reason) => ({
@@ -35,28 +39,29 @@
         });
         const log = [
             mk(9, 'out', pick(3), 'Material create (BAPI_MATERIAL_SAVEDATA)', 'failed',
-                'E MM 021 — Valuation class 3100 not allowed for material type ROH in plant 1700', 'Valuation class mismatch'),
-            mk(9, 'out', pick(3), 'Material create — retry', 'success', 'Created on retry after valuation class correction'),
-            mk(7, 'out', pick(6), 'Plant extension (MARC insert)', 'failed',
-                'E M3 314 — No authorization for plant 3000 (RFC user RFC_DMP)', 'Missing SAP authorization'),
-            mk(6, 'out', pick(6), 'Plant extension — retry', 'success', 'Extended after role assignment to RFC_DMP'),
-            mk(6, 'out', pick(8), 'Material update (BAPI_MATERIAL_SAVEDATA)', 'failed',
                 'RFC_COMMUNICATION_FAILURE — connection to ECC lost during commit', 'RFC connection timeout'),
+            mk(9, 'out', pick(3), 'Material create — retry', 'success', 'Created on retry after RFC reconnect'),
+            mk(7, 'out', pick(6), 'Plant extension (MARC insert)', 'failed',
+                'Message server not reachable — SAP system in planned maintenance window', 'SAP system unavailable'),
+            mk(6, 'out', pick(6), 'Plant extension — retry', 'success', 'Extended after the maintenance window closed'),
+            mk(6, 'out', pick(8), 'Material update (BAPI_MATERIAL_SAVEDATA)', 'failed',
+                'RFC_COMMUNICATION_FAILURE — read timeout after 60 s waiting for ECC response', 'RFC connection timeout'),
             mk(5, 'out', pick(8), 'Material update — retry', 'success', 'Committed after RFC reconnect'),
             mk(4, 'out', pick(11), 'MRP data update (MM02)', 'failed',
-                'E M3 490 — Unit of measure SET not maintained in table T006', 'Unit of measure missing'),
-            mk(3, 'out', pick(11), 'MRP data update — retry', 'failed',
-                'E M3 490 — Unit of measure SET not maintained in table T006', 'Unit of measure missing'),
+                'E M3 022 — Material locked by user BATCH_PROC (update session still open)', 'Object locked in SAP'),
+            mk(3, 'out', pick(11), 'MRP data update — retry', 'success', 'Updated after the SAP lock was released'),
             mk(2, 'out', pick(14), 'Material create (BAPI_MATERIAL_SAVEDATA)', 'failed',
-                'E MM 072 — Material description exceeds 40 characters (field MAKTX)', 'Description too long'),
-            mk(2, 'out', pick(14), 'Material create — retry', 'success', 'Created after description truncation'),
+                'RFC_LOGON_FAILURE — logon ticket for RFC user RFC_DMP expired', 'RFC logon expired'),
+            mk(2, 'out', pick(14), 'Material create — retry', 'success', 'Created after the RFC logon ticket was renewed'),
+            mk(1, 'out', pick(5), 'Valuation update (MR21)', 'failed',
+                'Gateway GW_MAX_CONN exceeded — no free RFC connection available', 'Gateway connection limit'),
             // inbound: something changed IN SAP and was merged back to dmp
             mk(8, 'in', pick(1), 'Inbound: price update (MR21)', 'success', 'Standard price change in SAP — merged to dmp'),
             mk(5, 'in', pick(4), 'Inbound: storage location change (MM02)', 'success', 'Storage location E002 → E001 in SAP — merged to dmp'),
             mk(3, 'in', pick(9), 'Inbound: material blocked in SAP (MM06)', 'success', 'Plant block set in SAP — block flag merged to dmp'),
             mk(1, 'in', pick(2), 'Inbound: PO unit change (MM02)', 'success', 'PO unit conversion changed in SAP — merged to dmp')
         ];
-        window.Store.set(s => { s.sapLog = log; });
+        window.Store.set(s => { s.sapLog = log; s.__sapLogV2 = true; });
     }
 
     /* ---- real outbound successes: every System/SAP stage that ran ---- */
@@ -144,6 +149,11 @@
                         <h2 style="font-size:22px;font-weight:600">SAP integration</h2>
                         <div class="muted" style="font-size:14px;margin-top:3px">Every recording call sent to SAP and every SAP-side change merged back to dmp. Central team view.</div>
                     </div>
+                    <button class="btn btn-black btn-sm" data-act="export-pdf">⬇ Export PDF</button>
+                </div>
+                <div class="print-head">
+                    <div class="ph-title">dmp — SAP integration</div>
+                    <div class="ph-sub">${esc(new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }))} · ${outCalls.length} outbound calls · ${100 - failPct}% success · ${inbound.length} inbound merges · Central team view</div>
                 </div>
 
                 <div class="dash-tiles">
@@ -166,7 +176,7 @@
                         </div>
                     </div>`}
                     ${`<div class="panel-card viz-card"><div class="pc-title">Most common failure reasons</div>
-                        <div class="viz-sub">What breaks SAP recording most often</div>
+                        <div class="viz-sub">Data consistency is validated in dmp before the call — failures are connection &amp; SAP-side runtime issues</div>
                         ${reasonRows.length ? `<div class="hbar">${reasonRows.map(k => `
                             <div class="hb-row">
                                 <div class="hb-line"><span class="hb-label">${esc(k)}</span><span class="hb-value">${reasons[k]}×</span></div>
@@ -192,6 +202,8 @@
         window.UI.bindActions(root, {
             'home': () => window.UI.go('#/master'),
             'tab': (t) => { S.tab = t.getAttribute('data-v'); window.Views.sapLog(); },
+            'export-pdf': () => window.UI.exportPdf(root.querySelector('.page-full'),
+                'dmp_sap_integration_' + new Date().toISOString().slice(0, 10) + '.pdf'),
             'open-item': (t) => window.UI.go('#/item/' + t.getAttribute('data-id')),
             'open-req': (t) => window.UI.go('#/request/' + t.getAttribute('data-id'))
         });

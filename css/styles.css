@@ -490,7 +490,8 @@ a { color: inherit; }
 .pdf-export .print-head { display: block; margin: 0 0 18px; padding-bottom: 12px; border-bottom: 2px solid #2C4A15; }
 .pdf-export .print-head .ph-title { font-size: 20px; font-weight: 700; }
 .pdf-export .print-head .ph-sub { font-size: 12px; color: #666; margin-top: 3px; }
-.pdf-export .form-header button, .pdf-export .dash-filters, .pdf-export .vt-btn { display: none !important; }
+.pdf-export .form-header button, .pdf-export .dash-filters, .pdf-export .vt-btn,
+.pdf-export .mode-tabs, .pdf-export input.form-input { display: none !important; }
 @media print {
     /* chrome away: app bar, breadcrumbs, sidebar, controls — content only */
     .header, .sub-header, .notif-panel, .toast-wrap, .viz-tip, .sidebar,

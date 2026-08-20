@@ -678,12 +678,60 @@
         return errs.length === 0;
     }
 
+    /* ---- shared PDF export: rasterize a page section (html2canvas + jsPDF),
+       paginate on card boundaries, download directly ---- */
+    async function exportPdf(el, filename) {
+        if (!el || !window.html2canvas || !window.jspdf) {
+            toast({ title: 'Export unavailable', body: 'PDF engine failed to load.', kind: 'danger' });
+            return;
+        }
+        toast({ title: 'Generating PDF…', body: 'Capturing the page — one moment.', kind: 'info' });
+        el.classList.add('pdf-export');
+        await new Promise(res => setTimeout(res, 60));   // let the export styles paint
+        try {
+            const canvas = await window.html2canvas(el, { scale: 1.5, backgroundColor: '#ffffff', logging: false, windowWidth: el.scrollWidth });
+            const px = canvas.width / (el.scrollWidth || el.offsetWidth || 1);
+            const breaks = [...el.querySelectorAll('.dash-tiles, .viz-card, .dash-section, .panel-card')]
+                .map(b => Math.round((b.getBoundingClientRect().top - el.getBoundingClientRect().top) * px))
+                .filter(y => y > 0).sort((a, b) => a - b);
+            const { jsPDF } = window.jspdf;
+            const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+            const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight();
+            const margin = 24;
+            const imgW = pw - margin * 2;
+            const pageH = Math.floor((ph - margin * 2) * (canvas.width / imgW));
+            let y = 0, page = 0;
+            while (y < canvas.height - 4) {
+                let end = Math.min(y + pageH, canvas.height);
+                if (end < canvas.height) {
+                    const cut = breaks.filter(b => b > y + pageH * 0.55 && b <= end).pop();
+                    if (cut) end = cut - Math.round(6 * px);
+                }
+                const slice = document.createElement('canvas');
+                slice.width = canvas.width; slice.height = end - y;
+                const ctx = slice.getContext('2d');
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, slice.width, slice.height);
+                ctx.drawImage(canvas, 0, y, canvas.width, end - y, 0, 0, canvas.width, end - y);
+                if (page) pdf.addPage();
+                pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', margin, margin, imgW, (end - y) * (imgW / canvas.width));
+                y = end; page++;
+            }
+            pdf.save(filename);
+            toast({ title: 'PDF downloaded', body: page + ' page(s) — ' + filename, kind: 'info' });
+        } catch (err) {
+            toast({ title: 'Export failed', body: String(err && err.message || err), kind: 'danger' });
+        } finally {
+            el.classList.remove('pdf-export');
+        }
+    }
+
     window.UI = {
         esc, go, nowLabel, bindActions, toast, openModal, closeModals,
         renderHeader, toggleNotifPanel,
         field, techGrid, workflowTracker, historyList,
         categoryEditorHtml, bindCategoryEditor, collectCategoryEditor, validateCategoryEditor, searchSelectHtml,
         plantName, plantLabel, groupDesc, valuationDesc, categorySchema, abcDesc, storageOptionsFor, inventoryRows, ds,
-        docListHtml, docKB, bindInvMinMaxRule
+        docListHtml, docKB, bindInvMinMaxRule, exportPdf
     };
 })();

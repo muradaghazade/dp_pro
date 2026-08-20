@@ -501,58 +501,6 @@
         return `<svg class="viz viz-line" viewBox="0 0 ${W} ${H}" role="img">${grid}${areas}${lines}${endLabs}${ticks}${hits}</svg>`;
     }
 
-    /* ---- PDF export: rasterize the dashboard content and paginate the image
-       on card boundaries so no chart is sliced across two pages ---- */
-    async function exportPdf(root) {
-        const el = root.querySelector('.content-panel');
-        if (!el || !window.html2canvas || !window.jspdf) {
-            window.UI.toast({ title: 'Export unavailable', body: 'PDF engine failed to load.', kind: 'danger' });
-            return;
-        }
-        window.UI.toast({ title: 'Generating PDF…', body: 'Capturing the dashboard — one moment.', kind: 'info' });
-        el.classList.add('pdf-export');
-        await new Promise(res => setTimeout(res, 60));   // let the export styles paint
-        try {
-            const canvas = await window.html2canvas(el, { scale: 1.5, backgroundColor: '#ffffff', logging: false, windowWidth: el.scrollWidth });
-            const px = canvas.width / (el.scrollWidth || el.offsetWidth || 1);   // css px → canvas px
-            // candidate page-break lines: the TOP of every block-level card
-            const breaks = [...el.querySelectorAll('.dash-tiles, .viz-card, .dash-section, .panel-card')]
-                .map(b => { let y = 0, n = b; while (n && n !== el) { y += n.offsetTop; n = n.offsetParent === el ? null : n.offsetParent; } return Math.round((b.getBoundingClientRect().top - el.getBoundingClientRect().top) * px); })
-                .filter(y => y > 0).sort((a, b) => a - b);
-            const { jsPDF } = window.jspdf;
-            const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
-            const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight();
-            const margin = 24;
-            const imgW = pw - margin * 2;
-            const pageH = Math.floor((ph - margin * 2) * (canvas.width / imgW));   // canvas px per page
-            let y = 0, page = 0;
-            while (y < canvas.height - 4) {
-                let end = Math.min(y + pageH, canvas.height);
-                if (end < canvas.height) {
-                    // cut on the last card boundary that fits, so cards stay whole
-                    // (never cut before 55% of the page — avoids confetti pages)
-                    const cut = breaks.filter(b => b > y + pageH * 0.55 && b <= end).pop();
-                    if (cut) end = cut - Math.round(6 * px);
-                }
-                const slice = document.createElement('canvas');
-                slice.width = canvas.width; slice.height = end - y;
-                const ctx = slice.getContext('2d');
-                ctx.fillStyle = '#ffffff';
-                ctx.fillRect(0, 0, slice.width, slice.height);
-                ctx.drawImage(canvas, 0, y, canvas.width, end - y, 0, 0, canvas.width, end - y);
-                if (page) pdf.addPage();
-                pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', margin, margin, imgW, (end - y) * (imgW / canvas.width));
-                y = end; page++;
-            }
-            pdf.save('dmp_dashboard_' + new Date().toISOString().slice(0, 10) + '.pdf');
-            window.UI.toast({ title: 'PDF downloaded', body: page + ' page(s) — dmp_dashboard_' + new Date().toISOString().slice(0, 10) + '.pdf', kind: 'info' });
-        } catch (err) {
-            window.UI.toast({ title: 'Export failed', body: String(err && err.message || err), kind: 'danger' });
-        } finally {
-            el.classList.remove('pdf-export');
-        }
-    }
-
     /* ---------------- page ---------------- */
     function tile(label, value, sub) {
         return `<div class="stat-tile"><div class="st-label">${esc(label)}</div>
@@ -906,7 +854,8 @@
             'range': (t) => { S.rangeDays = Number(t.getAttribute('data-v')); S.f.frame = ''; window.Views.dashboard(); },
             'open-req': (t) => window.UI.go('#/request/' + t.getAttribute('data-id')),
             'items-report': () => window.UI.go('#/items-report'),
-            'export-pdf': () => exportPdf(root),
+            'export-pdf': () => window.UI.exportPdf(root.querySelector('.content-panel'),
+                'dmp_dashboard_' + new Date().toISOString().slice(0, 10) + '.pdf'),
             'clear-dash-filters': () => { S.f = EMPTY_FILTERS(); window.Views.dashboard(); },
             'toggle-sidebar': () => { S.collapsed = !S.collapsed; root.querySelector('.sidebar').classList.toggle('collapsed', S.collapsed); }
         });
