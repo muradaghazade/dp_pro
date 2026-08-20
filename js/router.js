@@ -6,6 +6,7 @@
         { re: /^#\/master$/, view: () => window.Views.master() },
         { re: /^#\/dashboard$/, view: () => window.Views.dashboard() },
         { re: /^#\/items-report$/, view: () => window.Views.itemsReport() },
+        { re: /^#\/sap$/, view: () => window.Views.sapLog() },
         { re: /^#\/item\/([^/?]+)\/history$/, view: (m) => window.Views.itemHistory(m[1]) },
         { re: /^#\/item\/([^/?]+)/, view: (m) => window.Views.item(m[1]) },
         { re: /^#\/request\/new$/, view: () => window.Views.requestForm(parseQuery()) },

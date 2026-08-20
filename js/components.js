@@ -333,6 +333,7 @@
                 ${isCentral ? `
                     <div class="drawer-section">Administration <span class="drawer-role-chip">Central team</span></div>
                     ${link('#/dashboard', ic.chart, 'Analytics dashboard')}
+                    ${link('#/sap', `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M4 12h16M4 17h10"/><circle cx="19" cy="17" r="2.6"/></svg>`, 'SAP integration')}
                     ${link('#/categories', ic.grid, 'Category catalog')}
                     ${link('#/manufacturers', ic.factory, 'Manufacturers')}
                     ${link('#/users', ic.users, 'User management')}

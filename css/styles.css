@@ -476,6 +476,40 @@ a { color: inherit; }
 .dr-row { display: flex; align-items: center; gap: 8px; }
 .dr-lbl { font-size: 11.5px; color: var(--text-muted); width: 32px; flex: 0 0 32px; }
 .dr-row .form-input { font-size: 12.5px; padding: 0 8px; height: 34px; }
+.sap-table td { vertical-align: top; padding-top: 12px; padding-bottom: 12px; }
+.sap-fail-msg { color: #a32020; }
+.sap-reason { font-size: 11.5px; color: #7a6a1f; background: #FFFBEA; border: 1px solid #EAD98A;
+    border-radius: 5px; padding: 2px 7px; display: inline-block; margin-top: 4px; }
+
+/* ---------------- Dashboard PDF export ---------------- */
+.print-head { display: none; }
+/* capture mode: same look as print — report header on, controls off.
+   min-width forces a desktop layout even from a narrow window, so the
+   exported pages always use the full dashboard geometry */
+.pdf-export { min-width: 1200px; }
+.pdf-export .print-head { display: block; margin: 0 0 18px; padding-bottom: 12px; border-bottom: 2px solid #2C4A15; }
+.pdf-export .print-head .ph-title { font-size: 20px; font-weight: 700; }
+.pdf-export .print-head .ph-sub { font-size: 12px; color: #666; margin-top: 3px; }
+.pdf-export .form-header button, .pdf-export .dash-filters, .pdf-export .vt-btn { display: none !important; }
+@media print {
+    /* chrome away: app bar, breadcrumbs, sidebar, controls — content only */
+    .header, .sub-header, .notif-panel, .toast-wrap, .viz-tip, .sidebar,
+    .dash .form-header, .dash-filters, .modal-overlay { display: none !important; }
+    .workspace { display: block; border-top: none; min-height: 0; }
+    .content-panel { padding: 0; }
+    body { background: #fff; }
+    .print-head { display: block; margin: 0 0 18px; padding-bottom: 12px; border-bottom: 2px solid #2C4A15; }
+    .print-head .ph-title { font-size: 20px; font-weight: 700; }
+    .print-head .ph-sub { font-size: 12px; color: #666; margin-top: 3px; }
+    /* keep every card whole on a page; charts scale to the page width */
+    .viz-card, .stat-tile, .panel-card, .dash-section { break-inside: avoid; page-break-inside: avoid; }
+    .dash-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .dash-tiles { grid-template-columns: repeat(5, 1fr); }
+    .viz-line { max-width: 100% !important; }
+    .dash-section { padding-top: 12px; margin-top: 18px; break-after: avoid; }
+    a, .clickable { color: inherit; }
+    .vt-btn, .btn, .btn-mini, .mode-tabs { display: none !important; }
+}
 .viz-row { cursor: default; }
 .viz-row:hover path { opacity: .85; }
 .viz-row .viz-wash { transition: opacity .12s; }
