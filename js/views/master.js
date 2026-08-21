@@ -137,6 +137,7 @@
             </div>
             <div class="ai-chips">${chips}</div>
             ${grid}
+            ${a.parsed && a.parsed.enrichedNotes ? `<div class="ai-enrich-note">✨ AI-enriched: ${esc(a.parsed.enrichedNotes.join(' · '))}</div>` : ''}
         </div>`;
     }
 

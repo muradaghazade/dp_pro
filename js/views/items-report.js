@@ -256,60 +256,6 @@
             <div class="seen-all">${filtersActive() ? shown.length + ' of ' + rows.length : rows.length} item(s).</div>`;
     }
 
-    /* ---- minimal .xlsx writer: stored-entry ZIP + one inline-string sheet.
-       No libraries — a genuine Excel file built byte by byte. ---- */
-    const CRC_TABLE = (() => {
-        const t = new Uint32Array(256);
-        for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
-        return t;
-    })();
-    function crc32(bytes) {
-        let c = 0xFFFFFFFF;
-        for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
-        return (c ^ 0xFFFFFFFF) >>> 0;
-    }
-    function zipStore(files) {
-        const enc = new TextEncoder();
-        const u16 = (v) => [v & 255, (v >> 8) & 255];
-        const u32 = (v) => [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255];
-        const parts = [], central = [];
-        let offset = 0;
-        files.forEach(f => {
-            const name = enc.encode(f.name), data = enc.encode(f.text);
-            const crc = crc32(data);
-            const head = new Uint8Array([0x50, 0x4B, 3, 4, ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
-                ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(name.length), ...u16(0)]);
-            parts.push(head, name, data);
-            central.push({ name, crc, size: data.length, offset });
-            offset += head.length + name.length + data.length;
-        });
-        let cdSize = 0;
-        central.forEach(c => {
-            const e = new Uint8Array([0x50, 0x4B, 1, 2, ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0),
-                ...u32(c.crc), ...u32(c.size), ...u32(c.size), ...u16(c.name.length), ...u16(0), ...u16(0),
-                ...u16(0), ...u16(0), ...u32(0), ...u32(c.offset)]);
-            parts.push(e, c.name);
-            cdSize += e.length + c.name.length;
-        });
-        parts.push(new Uint8Array([0x50, 0x4B, 5, 6, ...u16(0), ...u16(0), ...u16(central.length), ...u16(central.length),
-            ...u32(cdSize), ...u32(offset), ...u16(0)]));
-        return new Blob(parts, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    }
-    function xmlEsc(s) {
-        return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
-    function xlsxBlob(rows, sheetName) {
-        const rowXml = rows.map(r => '<row>' + r.map(v =>
-            `<c t="inlineStr"><is><t xml:space="preserve">${xmlEsc(v)}</t></is></c>`).join('') + '</row>').join('');
-        return zipStore([
-            { name: '[Content_Types].xml', text: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>' },
-            { name: '_rels/.rels', text: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
-            { name: 'xl/workbook.xml', text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEsc(sheetName || 'Sheet1')}" sheetId="1" r:id="rId1"/></sheets></workbook>` },
-            { name: 'xl/_rels/workbook.xml.rels', text: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>' },
-            { name: 'xl/worksheets/sheet1.xml', text: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rowXml}</sheetData></worksheet>` }
-        ]);
-    }
-
     /* ---- export the (filtered) report as an Excel file ---- */
     function exportExcel(rows) {
         const shown = rows.filter(matches).sort((a, b) => (b.completed || 0) - (a.completed || 0));
@@ -338,14 +284,8 @@
                 x.seeded ? 'Initial master data' : 'Created via request'
             ];
         });
-        const blob = xlsxBlob([header].concat(dataRows), 'Created items');
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'dmp_created_items_' + new Date().toISOString().slice(0, 10) + '.xlsx';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+        window.UI.exportXlsx([header].concat(dataRows), 'Created items',
+            'dmp_created_items_' + new Date().toISOString().slice(0, 10) + '.xlsx');
         window.UI.toast({ title: 'Excel exported', body: shown.length + ' item(s) exported' + (filtersActive() ? ' (filtered list)' : '') + '.', kind: 'info' });
     }
 

@@ -62,6 +62,7 @@
     function nameShaped(w) {
         if (!w || !/^[A-Za-z][A-Za-z&.-]{1,14}$/.test(w)) return false;
         if (NOT_BRANDS.has(w.toUpperCase()) || CAT_STOP.has(w.toLowerCase()) || MFG_STOP.has(w.toLowerCase())) return false;
+        if (/^(sp[abcz]|[345]l|p[hjklm])$/i.test(w)) return false;               // belt section codes aren't brands
         return !CAT_DOMAINS.some(d => d.re.test(w.toLowerCase()));               // domain nouns aren't brands
     }
     function detectMfr(t) {
@@ -167,29 +168,228 @@
         return parsed;
     }
 
+    /* ---- AI enrichment of MISSING data using real industry numbering rules.
+       When the description omits the part number, it is derived from the
+       provided attributes (and vice versa) — the derivations follow genuine
+       standards, so the enriched data is real:
+       · V-belts: SECTION+pitch length mm (SPB2360), light-duty L sections
+         SECTION+length in tenths of inches (5L690 = 69.0")
+       · Ball bearings: ISO 60/62/63 series from bore × OD (25×52 → 6205)
+       · Tapered bearings: ISO 302xx series from bore × OD (30×62 → 30206) ---- */
+    const BALL_SERIES = {
+        10: { 26: '6000', 30: '6200', 35: '6300' }, 12: { 28: '6001', 32: '6201', 37: '6301' },
+        15: { 32: '6002', 35: '6202', 42: '6302' }, 17: { 35: '6003', 40: '6203', 47: '6303' },
+        20: { 42: '6004', 47: '6204', 52: '6304' }, 25: { 47: '6005', 52: '6205', 62: '6305' },
+        30: { 55: '6006', 62: '6206', 72: '6306' }, 35: { 62: '6007', 72: '6207', 80: '6307' },
+        40: { 68: '6008', 80: '6208', 90: '6308' }, 45: { 75: '6009', 85: '6209', 100: '6309' },
+        50: { 80: '6010', 90: '6210', 110: '6310' }
+    };
+    const BALL_W = { 6000: 8, 6200: 9, 6300: 11, 6001: 8, 6201: 10, 6301: 12, 6002: 9, 6202: 11, 6302: 13,
+        6003: 10, 6203: 12, 6303: 14, 6004: 12, 6204: 14, 6304: 15, 6005: 12, 6205: 15, 6305: 17,
+        6006: 13, 6206: 16, 6306: 19, 6007: 14, 6207: 17, 6307: 21, 6008: 15, 6208: 18, 6308: 23,
+        6009: 16, 6209: 19, 6309: 25, 6010: 16, 6210: 20, 6310: 27 };
+    const TAPERED_SERIES = {
+        25: { 52: '30205' }, 30: { 62: '30206' }, 35: { 72: '30207' }, 40: { 80: '30208' },
+        45: { 85: '30209' }, 50: { 90: '30210' }, 55: { 100: '30211' }, 60: { 110: '30212' }, 85: { 150: '30217' }
+    };
+    const BALL_INV = {}, TAPERED_INV = {};
+    Object.keys(BALL_SERIES).forEach(b => Object.keys(BALL_SERIES[b]).forEach(o => {
+        BALL_INV[BALL_SERIES[b][o]] = [Number(b), Number(o), BALL_W[BALL_SERIES[b][o]] || null];
+    }));
+    Object.keys(TAPERED_SERIES).forEach(b => Object.keys(TAPERED_SERIES[b]).forEach(o => {
+        TAPERED_INV[TAPERED_SERIES[b][o]] = [Number(b), Number(o)];
+    }));
+
+    function deriveEnrichment(parsed, raw) {
+        const t = String(raw || '');
+        const notes = [];
+        const attrs = parsed.attributes = parsed.attributes || {};
+        const num = (s) => { const m = String(s || '').match(/(\d+(?:[.,]\d+)?)/); return m ? parseFloat(m[1].replace(',', '.')) : null; };
+        const get = (re) => { const k = Object.keys(attrs).find(x => re.test(x)); return k ? attrs[k] : ''; };
+        const setIfEmpty = (re, val) => {
+            const k = Object.keys(attrs).find(x => re.test(x));
+            if (k && !attrs[k] && val) { attrs[k] = val; return true; }
+            return false;
+        };
+        const isBelt = /belt/i.test(parsed.unspscLabel || '') || /\bbelt\b/i.test(t);
+        const isBearing = /bearing/i.test(parsed.unspscLabel || '') || /\bbearing\b/i.test(t);
+
+        let identOverride = '';   // compact code for the MRO short name when the
+                                  // catalog designation itself carries spaces
+        let catalogDerived = false;   // true when a REAL numbering standard produced the code
+        if (!parsed.mfrPartNo && isBelt) {
+            let sec = ((get(/section|profile/i) || (t.match(/\b(sp[abcz]|[345]l|p[hjklm])\b/i) || [])[0] || '')).replace(/\s+/g, '').toUpperCase();
+            if (!sec) sec = ((t.match(/section\s+([abcd])\b/i) || [])[1] || '').toUpperCase();
+            const lenMm = num(get(/length/i)) || num((t.match(/\b(\d{3,5})\s?mm\b/i) || [])[1]);
+            const isSkf = /^skf$/i.test(parsed.manufacturer || '');   // SKF belts use the PHG catalog prefix
+            if (sec && lenMm) {
+                if (/^SP[ABCZ]$/.test(sec)) {
+                    const base = sec + Math.round(lenMm);
+                    const part = (isSkf ? 'PHG ' : '') + base;
+                    parsed.mfrPartNo = part;
+                    if (isSkf) identOverride = base;
+                    catalogDerived = true;
+                    notes.push(`Part number ${part} derived from belt section ${sec} + pitch length ${Math.round(lenMm)} mm (${isSkf ? 'SKF PHG series' : 'standard V-belt coding'})`);
+                } else if (/^[345]L$/.test(sec)) {
+                    // full FHP catalog designation: inch code + metric LA length,
+                    // e.g. 5L 690 / 1753 LA (69.0" = 1753 mm)
+                    const inchCode = Math.round(lenMm / 25.4 * 10);
+                    const part = `${sec} ${inchCode} / ${Math.round(lenMm)} LA`;
+                    parsed.mfrPartNo = part;
+                    identOverride = sec + inchCode;
+                    catalogDerived = true;
+                    notes.push(`Part number ${part} derived from belt section ${sec} (${(inchCode / 10).toFixed(1)}″) + length ${Math.round(lenMm)} mm (FHP V-belt coding)`);
+                } else if (/^[ABCD]$/.test(sec)) {
+                    // classical wrapped V-belts: section + inside length in whole
+                    // inches (991 mm = 39″ → A39). SKF lists these under the PHG
+                    // prefix (PHG A39); others as section/inch + metric Li.
+                    const li = num((t.match(/(\d{3,5})\s?mm\s*(?:length|li\b)/i) || [])[1]) || lenMm;
+                    const inch = Math.round(li / 25.4);
+                    const base = sec + inch;
+                    const part = isSkf ? `PHG ${base}` : `${sec} ${inch} / ${Math.round(li)} LI`;
+                    parsed.mfrPartNo = part;
+                    identOverride = base;
+                    catalogDerived = true;
+                    notes.push(`Part number ${part} derived from classical section ${sec} + inside length ${Math.round(li)} mm (${inch}″) — ${isSkf ? 'SKF PHG series' : 'wrapped V-belt coding'}`);
+                } else if (/^P[HJKLM]$/.test(sec)) {
+                    // Poly-V ribbed belts: ribs + metric profile code, plus the
+                    // inch-series equivalent — e.g. 4PJ559/220J (559 mm = 22.0″).
+                    // 4 ribs is the standard stock width when none is specified.
+                    const ribs = ((t.match(/(\d{1,2})\s*ribs?\b/i) || [])[1] || '4');
+                    const mm = Math.round(lenMm);
+                    const inch = Math.round(lenMm / 25.4 * 10);
+                    const part = `${ribs}${sec}${mm}/${inch}${sec[1]}`;
+                    parsed.mfrPartNo = part;
+                    identOverride = `${ribs}${sec}${mm}`;
+                    catalogDerived = true;
+                    notes.push(`Part number ${part} derived from ${ribs} ribs × profile ${sec} + effective length ${mm} mm (${(inch / 10).toFixed(1)}″ = ${inch}${sec[1]}) — Poly-V ribbed belt coding`);
+                }
+            }
+        }
+        if (!parsed.mfrPartNo && isBearing) {
+            const bore = num(get(/bore|inner/i)), od = num(get(/outside|outer/i));
+            const tapered = /taper/i.test(t) || /taper/i.test(String(get(/model|bearing type/i)));
+            const tbl = tapered ? TAPERED_SERIES : BALL_SERIES;
+            if (bore && od && tbl[bore] && tbl[bore][od]) {
+                let part = tbl[bore][od];
+                if (!tapered) part += /2rs/i.test(t) ? '-2RS' : (/2z|zz/i.test(t) ? '-2Z' : '');
+                parsed.mfrPartNo = part;
+                catalogDerived = true;
+                notes.push(`Part number ${part} derived from bore ${bore} mm × OD ${od} mm (ISO bearing series)`);
+            }
+        }
+        // universal fallback: still no part number → compose a specification-based
+        // designation from the item's identifying values, so EVERY item gets an
+        // orderable code (clearly labeled as spec-derived, not a catalog number)
+        if (!parsed.mfrPartNo) {
+            const clean = (v) => String(v).replace(/\s*(mm|cm|kg|g|bar|kn|nm|°c)\b/gi, '')
+                .replace(/\s+/g, '').toUpperCase();
+            const vals = [];
+            Object.keys(attrs).forEach(k => {
+                if (vals.length >= 3) return;
+                const v = String(attrs[k] || '').trim();
+                if (v && /\d/.test(v) && v.length <= 14) vals.push(clean(v));
+            });
+            let code = vals.filter(Boolean).join('-');
+            if (!code) {
+                // last resort: size token + grade straight from the text
+                const size = ((t.match(/\b([a-z]?\d{1,4}(?:[.,]\d+)?\s?[x×]\s?\d{1,4}(?:[.,]\d+)?)\b/i) || [])[1] || '');
+                const grade = ((t.match(/grade\s*([\d.]+)/i) || [])[1] || '');
+                code = [size ? clean(size).replace(/×/g, 'X') : '', grade].filter(Boolean).join('-');
+            }
+            if (code) {
+                parsed.mfrPartNo = code;
+                // synthetic spec code — must NOT influence duplicate matching,
+                // a master record without a part number is still the same item
+                parsed.specDerivedPart = true;
+                notes.push(`Designation ${code} composed from the item's specification values — the description carries no catalog part number`);
+            }
+        }
+        // reverse: part number known → fill missing dimensions from the series data
+        if (parsed.mfrPartNo && isBearing) {
+            const bm = parsed.mfrPartNo.match(/\b(6[0-3]\d{2})\b/);
+            const tm = parsed.mfrPartNo.match(/\b(30\d{3})\b/);
+            if (bm && BALL_INV[bm[1]]) {
+                const [b, o, w] = BALL_INV[bm[1]];
+                let did = setIfEmpty(/bore|inner/i, b + ' mm');
+                did = setIfEmpty(/outside|outer/i, o + ' mm') || did;
+                did = (w && setIfEmpty(/width/i, w + ' mm')) || did;
+                if (did) notes.push(`Dimensions ${b}×${o}${w ? '×' + w : ''} mm filled from ISO bearing series ${bm[1]}`);
+            } else if (tm && TAPERED_INV[tm[1]]) {
+                const [b, o] = TAPERED_INV[tm[1]];
+                let did = setIfEmpty(/bore|inner/i, b + ' mm');
+                did = setIfEmpty(/outside|outer/i, o + ' mm') || did;
+                did = setIfEmpty(/shaft/i, b + ' mm') || did;
+                if (did) notes.push(`Dimensions ${b}×${o} mm filled from ISO tapered series ${tm[1]}`);
+            }
+        }
+        if (parsed.mfrPartNo && isBelt) {
+            const lb = parsed.mfrPartNo.match(/^([345]L)(\d{3})$/i);
+            if (lb) {
+                const lenMm = Math.round(parseInt(lb[2], 10) / 10 * 25.4);
+                if (setIfEmpty(/length/i, lenMm + ' mm')) {
+                    notes.push(`Length ${lenMm} mm filled from belt code ${parsed.mfrPartNo} (${(parseInt(lb[2], 10) / 10).toFixed(1)}″)`);
+                }
+            }
+        }
+        if (notes.length) {
+            // only a REAL catalog code implies an OEM part — spec designations stay Generic
+            if (parsed.matTypeChoice === 'Generic' && parsed.mfrPartNo && catalogDerived) parsed.matTypeChoice = 'OEM';
+            parsed.enrichedNotes = notes;
+            if (parsed.shortName) {
+                // the short name uses the compact code; the long description
+                // carries the full catalog designation
+                const sd = structuredDesc(identOverride
+                    ? Object.assign({}, parsed, { mfrPartNo: identOverride }) : parsed, t);
+                parsed.shortName = sd.shortName;
+                if (identOverride) {
+                    const full = structuredDesc(parsed, t);
+                    parsed.longDesc = full.longDesc.replace(full.shortName, sd.shortName);
+                } else {
+                    parsed.longDesc = sd.longDesc;
+                }
+            }
+        }
+        return notes;
+    }
+
     const PROFILES = [
         {
-            match: (t) => /belt/.test(t) && (/wedge|v-?belt|\bsp[abcz]\s?-?\d{3,5}/.test(t)),
+            match: (t) => /belt/.test(t) && (/wedge|ve+\s*belt|v[- ]?belt|poly\s*-?\s*v|ribbed|\bsp[abcz]\b|\b[345]l\b|\bp[hjklm]\b/.test(t)),
             build: (t) => {
-                const partU = ((t.match(/\bsp[abcz]\s?-?\d{3,5}\b/i) || [])[0] || '').replace(/[\s-]+/g, '').toUpperCase();
-                const section = (partU.match(/^SP[ABCZ]/) || [])[0] || '';
-                const len = (partU.match(/\d{3,5}/) || [])[0] || firstMatch(t, /pitch\s*length\s*(\d{3,5})/i) || '';
+                // SP sections carry the pitch length in the code (SPC2500); light-duty
+                // L codes are 3 digits = length in tenths of inches (5L690 = 69.0");
+                // Poly-V ribbed profiles are PH/PJ/PK/PL/PM
+                const partU = ((t.match(/\bsp[abcz]\s?-?\d{3,5}\b/i) || [])[0] ||
+                               (t.match(/\b[345]l\s?-?\d{3}\b(?!\d)/i) || [])[0] || '').replace(/[\s-]+/g, '').toUpperCase();
+                const section = ((partU.match(/^(SP[ABCZ]|[345]L)/) || [])[0]) ||
+                    ((t.match(/\b(sp[abcz]|[345]l|p[hjklm])\b/i) || [])[0] || '').replace(/\s+/g, '').toUpperCase() ||
+                    ((t.match(/section\s+([abcd])\b/i) || [])[1] || '').toUpperCase();   // classical A/B/C/D
+                const isL = /^[345]L/.test(section);
+                const isPoly = /^P[HJKLM]$/.test(section) || /poly\s*-?\s*v|ribbed/i.test(t);
+                const isClassical = /^[ABCD]$/.test(section);
+                let len = (/^SP/.test(partU) ? (partU.match(/\d{3,5}/) || [])[0] : '') ||
+                    ((t.match(/pitch\s*length\s*(\d{3,5})/i) || [])[1] || '') ||
+                    ((t.match(/\b(\d{3,5})\s?mm\b/i) || [])[1] || '');
+                if (!len && isL && partU) len = String(Math.round(parseInt((partU.match(/\d{3}/) || ['0'])[0], 10) / 10 * 25.4));
+                const btype = isPoly ? 'Poly-V ribbed belt' : (isL ? 'Light-duty V-belt (FHP)'
+                    : (isClassical ? 'Classical wrapped V-belt' : 'Wedge V-belt'));
                 const mfr = detectMfr(t);
                 const width = dimNear(t, 'top width|width');
-                const short = mroShort('Belt', 'V', partU || (len ? len : ''));
+                const short = mroShort('Belt', isPoly ? 'Poly-V' : 'V', partU || (len ? len : ''));
                 const isDemoSkf = partU === 'SPC2500';   // the seeded master item
                 return {
-                    summary: 'Wedge V-belt' + (mfr ? ', ' + mfr : '') + (partU ? ' ' + partU : '') +
+                    summary: btype + (mfr ? ', ' + mfr : '') + (partU ? ' ' + partU : '') +
                         (section ? ', Section ' + section : '') + (len ? ', Pitch Length ' + len + ' mm' : ''),
                     unspsc: '26111801', unspscLabel: 'V belts', category: 'V belts', materialGroup: 'M008.0001',
                     manufacturer: mfr, mfrPartNo: partU, matTypeChoice: partU ? 'OEM' : 'Generic', baseUom: 'EA',
-                    name: 'Belt; Wedge V-belt' + (mfr ? ', ' + mfr : '') + (partU ? ', ' + partU : ''),
+                    name: 'Belt; ' + btype + (mfr ? ', ' + mfr : '') + (partU ? ', ' + partU : ''),
                     shortName: short,
                     longDesc: mroLong(short,
-                        ['Wedge V-belt', section ? 'Section ' + section : '', len ? 'Pitch length ' + len + 'mm' : '',
+                        [btype, section ? 'Section ' + section : '', len ? 'Pitch length ' + len + 'mm' : '',
                          width ? 'Top width ' + width + 'mm' : ''], mfr, partU),
                     attributes: {
-                        'Belt profile/section': section, 'Belt type': 'Wedge V-belt',
+                        'Belt profile/section': section, 'Belt type': btype,
                         'Belt properties': isDemoSkf ? 'Cogged' : '',
                         'Top width': width ? width + ' mm' : (isDemoSkf ? '22 mm' : ''),
                         'Wrapped cover': isDemoSkf ? 'Yes' : '', 'Construction': isDemoSkf ? 'Wrapped' : '',
@@ -613,8 +813,10 @@
         const mats = window.Store.materials();
         const results = [];
         mats.forEach(m => {
-            const pd = (parsed.mfrPartNo || '').replace(/\s/g, '').toLowerCase();
-            const md = (m.mfrPartNo || '').replace(/\s/g, '').toLowerCase();
+            // spec-composed designations are not real catalog codes — matching
+            // treats the item as having no part number
+            const pd = (parsed.specDerivedPart ? '' : (parsed.mfrPartNo || '')).replace(/\s/g, '').toLowerCase().replace(/^phg/, '');
+            const md = (m.mfrPartNo || '').replace(/\s/g, '').toLowerCase().replace(/^phg/, '');
             let sc = 0;
             // strong signal: same manufacturer part number
             if (pd && md && pd === md) sc = 0.99;
@@ -857,6 +1059,9 @@
         // and attribute values pulled from the text — runs after the category is
         // resolved so the category's attribute schema is available to fill
         enrichParsed(parsed, rawText);
+        // then derive what the description DIDN'T provide, using real
+        // industry numbering rules (belt codes, ISO bearing series…)
+        deriveEnrichment(parsed, rawText);
 
         const ranked = findMatches(parsed, rawText || '');
         const best = ranked[0];
@@ -888,6 +1093,7 @@
                 { label: 'Resolved attributes', detail: categoryFound ? `${Object.keys(parsed.attributes).length} attributes for “${parsed.category}”`
                     : (categorySuggestion ? `${categorySuggestion.catAttributes.length} attributes proposed for the new category` : '—') },
                 { label: 'Filled attribute values', detail: categoryFound ? (catalogCat ? 'Attribute set loaded from the category catalog — fill in the values' : 'Values extracted from description') : '—' },
+                ...(parsed.enrichedNotes ? [{ label: 'Enriched missing data', detail: parsed.enrichedNotes.join(' · ') }] : []),
                 { label: 'Checked material master', detail: outcomeLabel(outcome, exactMatch, myPlant) }
             ]
         };

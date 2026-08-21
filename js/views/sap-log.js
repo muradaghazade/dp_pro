@@ -149,7 +149,7 @@
                         <h2 style="font-size:22px;font-weight:600">SAP integration</h2>
                         <div class="muted" style="font-size:14px;margin-top:3px">Every recording call sent to SAP and every SAP-side change merged back to dmp. Central team view.</div>
                     </div>
-                    <button class="btn btn-black btn-sm" data-act="export-pdf">⬇ Export PDF</button>
+                    <button class="btn btn-outline btn-sm" data-act="export-pdf">⬇ Export PDF</button>
                 </div>
                 <div class="print-head">
                     <div class="ph-title">dmp — SAP integration</div>
@@ -190,7 +190,10 @@
                     <div class="mode-tabs dash-period" style="max-width:520px">
                         ${tab('all', 'All calls')}${tab('success', 'Successful')}${tab('failed', 'Failed')}${tab('in', 'SAP → dmp')}
                     </div>
-                    <input type="text" class="form-input" id="sap-q" value="${esc(S.q)}" placeholder="Search item, operation or message…" style="max-width:320px">
+                    <div style="display:flex;gap:8px;align-items:stretch">
+                        <button class="btn btn-black" data-act="export-excel" style="white-space:nowrap;height:38px;padding:0 14px;border:none">⬇ Export Excel</button>
+                        <input type="text" class="form-input" id="sap-q" value="${esc(S.q)}" placeholder="Search item, operation or message…" style="width:300px">
+                    </div>
                 </div>
                 <div id="sap-list">${listHtml(events)}</div>
             </div>`;
@@ -204,6 +207,19 @@
             'tab': (t) => { S.tab = t.getAttribute('data-v'); window.Views.sapLog(); },
             'export-pdf': () => window.UI.exportPdf(root.querySelector('.page-full'),
                 'dmp_sap_integration_' + new Date().toISOString().slice(0, 10) + '.pdf'),
+            'export-excel': () => {
+                const shown = events.filter(matches);
+                const header = ['Time', 'Direction', 'Item', 'Operation', 'Status', 'Message', 'Failure reason'];
+                const rows = shown.map(e => [
+                    new Date(e.ts).toLocaleString(), e.dir === 'in' ? 'SAP → dmp' : 'dmp → SAP',
+                    e.itemName || '', e.op || '', e.status === 'failed' ? 'Failed' : 'Success',
+                    e.message || '', e.reason || ''
+                ]);
+                window.UI.exportXlsx([header].concat(rows), 'SAP calls',
+                    'dmp_sap_calls_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+                window.UI.toast({ title: 'Excel exported', body: shown.length + ' call(s) exported' +
+                    (S.tab !== 'all' || S.q.trim() ? ' (filtered list)' : '') + '.', kind: 'info' });
+            },
             'open-item': (t) => window.UI.go('#/item/' + t.getAttribute('data-id')),
             'open-req': (t) => window.UI.go('#/request/' + t.getAttribute('data-id'))
         });
